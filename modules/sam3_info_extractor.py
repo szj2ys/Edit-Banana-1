@@ -396,9 +396,12 @@ class Sam3InfoExtractor(BaseProcessor):
     def load_model(self):
         """Load SAM3 model."""
         if self._sam3_model is None:
+            sam3_config = ConfigLoader.get_sam3_config()
+            device = sam3_config.get("device")  # e.g. "cpu" or "cuda", None = auto
             self._sam3_model = SAM3Model(
                 checkpoint_path=self._checkpoint_path,
-                bpe_path=self._bpe_path
+                bpe_path=self._bpe_path,
+                device=device
             )
         if not self._sam3_model.is_loaded:
             self._sam3_model.load()

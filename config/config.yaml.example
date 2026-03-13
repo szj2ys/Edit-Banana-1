@@ -1,7 +1,11 @@
-# SAM3 model config
+# SAM3 model config: set checkpoint_path and bpe_path to actual files under models/
+# Checkpoint must be sam3.pt (safetensors not used); BPE: bpe_simple_vocab_16e6.txt.gz
 sam3:
-  checkpoint_path: "/path/to/models/sam3.pt"
-  bpe_path: "./path/to/bpe_simple_vocab_16e6.txt.gz"
+  checkpoint_path: "models/sam3_ms/sam3.pt"
+  bpe_path: "models/bpe_simple_vocab_16e6.txt.gz"
+  # device: "cuda" | "cpu" | leave empty for auto (cuda if available)
+  # Set "cpu" if GPU does not match current PyTorch
+  # device: "cpu"
   score_threshold: 0.5
   epsilon_factor: 0.02
   min_area: 100
@@ -29,6 +33,10 @@ prompt_groups:
     min_area: 500
     priority: 1
 
+# Text OCR engine: tesseract (system) or paddleocr (better mixed CN/EN; pip install paddlepaddle==3.2.2 paddleocr)
+ocr:
+  engine: "tesseract"   # "tesseract" | "paddleocr"
+
 # Multimodal / VLM (optional, for text/OCR)
 multimodal:
   mode: "api"
@@ -44,6 +52,11 @@ multimodal:
   ca_cert_path: false
   proxy: ""
 
+# RMBG background removal (optional). Put model at models/rmbg/model.onnx; use scripts/setup_rmbg.py to download from ModelScope
+# rmbg:
+#   model_path: "models/rmbg/model.onnx"
+
 # Paths (optional)
 paths: {}
+
 # pipeline_mode: full   # optional: full | fast

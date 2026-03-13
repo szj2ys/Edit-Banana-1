@@ -2,19 +2,31 @@
 
 A lightweight HTTP wrapper that keeps a SAM3 model resident in memory and serves requests via FastAPI. The model is loaded once per server process, and requests are processed serially within a process to avoid VRAM spikes. Run multiple processes for concurrency and load balancing.
 
+**Dependencies:** Install the main project dependencies first (PyTorch, SAM3 library, and `pip install -r requirements.txt` from the repo root). This package only adds FastAPI/uvicorn; the SAM3 and torch imports come from the main environment.
+
 ## Start a server
 
+**Option A — shell scripts (run in separate terminals or background):**
 ```bash
-bash sam3_service/run_servers.sh
-bash sam3_service/run_rmbg_servers.sh
+bash sam3_service/run_servers.sh        # 1 SAM3 worker on port 8001
+bash sam3_service/run_servers.sh 3      # 3 SAM3 workers on 8001, 8002, 8003
+bash sam3_service/run_rmbg_servers.sh   # 1 RMBG worker on port 9101
+```
 
-curl -s http://127.0.0.1:9001/health
+**Option B — Python launcher (multiple workers in one command):**
+```bash
 python -m sam3_service.run_all_service --workers 2
+python -m sam3_service.run_all_service --workers 2 --rmbg 1
+```
+
+**Health check (SAM3 default port 8001):**
+```bash
+curl -s http://127.0.0.1:8001/health
 ```
 
 Notes:
 - `--cache-size` controls the LRU cache size for encoded images.
-- `workers` is pinned to 1 inside the launcher to keep a single model copy per process.
+- Workers are one process per port to keep a single model copy per process.
 - Set `--device cpu` to run without GPU (slow, but useful for debugging).
 
 ## Run multiple servers (manual)

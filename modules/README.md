@@ -1,6 +1,6 @@
 # Modules — pipeline components
 
-See project root README for full pipeline (Input → Segmentation → Text → XML/PPTX).
+See project root README for full pipeline (Input image → Segmentation → Text → DrawIO XML).
 
 ## 📁 Structure (overview)
 

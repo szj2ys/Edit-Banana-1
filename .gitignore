@@ -37,6 +37,9 @@ input/
 temp/
 logs/
 sam3_output/
+
+# SAM3 source (clone via docs/SETUP_SAM3.md or scripts/setup_sam3.sh)
+sam3_src/
 *.log
 
 # IDE & System
