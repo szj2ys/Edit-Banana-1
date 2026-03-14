@@ -33,16 +33,21 @@ from modules import (
     XMLMerger,
     MetricEvaluator,
     RefinementProcessor,
-    
+
     # 文字处理（已整合到 modules/text/）
     TextRestorer,
-    
+
     # 上下文和数据类型
     ProcessingContext,
     ProcessingResult,
     ElementInfo,
     LayerLevel,
     get_layer_level,
+
+    # 异常体系与错误恢复
+    EditBananaException,
+    ProcessingPartialResultError,
+    save_partial_results,
 )
 
 # 导入分组枚举，方便按需提取
@@ -237,6 +242,9 @@ class Pipeline:
         context.intermediate_results['was_upscaled'] = was_upscaled
         context.intermediate_results['upscale_factor'] = scale_factor
 
+        # 记录阶段完成情况用于错误恢复
+        completed_stages = []
+
         try:
             if with_text and self.text_restorer is not None:
                 print("\n[1] Text extraction (OCR)...")
@@ -252,10 +260,13 @@ class Pipeline:
                     import traceback
                     traceback.print_exc()
                     print("   Continuing without text...")
+                completed_stages.append('text_extraction')
             elif with_text:
                 print("\n[1] Text extraction (skipped - deps)")
+                completed_stages.append('text_extraction')
             else:
                 print("\n[1] Text extraction (skipped)")
+                completed_stages.append('text_extraction')
 
             print("\n[2] Segmentation (SAM3)...")
             
@@ -284,21 +295,59 @@ class Pipeline:
             self.sam3_extractor.save_visualization(context, vis_path)
             meta_path = os.path.join(img_output_dir, "sam3_metadata.json")
             self.sam3_extractor.save_metadata(context, meta_path)
+            completed_stages.append('segmentation')
 
             print("\n[3] Shape/icon processing...")
             result = self.icon_processor.process(context)
             print(f"   Icons: {result.metadata.get('processed_count', 0)}")
             result = self.shape_processor.process(context)
             print(f"   Shapes: {result.metadata.get('processed_count', 0)}")
+            completed_stages.append('shape_processing')
 
             print("\n[4] Arrows...")
-            result = self.arrow_processor.process(context)
-            print(f"   Arrows: {result.metadata.get('arrows_processed', 0)}")
+            try:
+                result = self.arrow_processor.process(context)
+                print(f"   Arrows: {result.metadata.get('arrows_processed', 0)}")
+                completed_stages.append('arrows')
+            except Exception as arrow_error:
+                print(f"   Arrows step failed: {arrow_error}")
+                print("   Saving partial results...")
+                save_partial_results(
+                    context=context,
+                    output_dir=img_output_dir,
+                    failed_stage='arrows',
+                    error=arrow_error,
+                    completed_stages=completed_stages
+                )
+                raise ProcessingPartialResultError(
+                    message=f"Arrow processing failed: {arrow_error}",
+                    failed_stage='arrows',
+                    completed_stages=completed_stages,
+                    partial_context=context
+                ) from arrow_error
 
             print("\n[5] XML fragments...")
-            self._generate_xml_fragments(context)
-            xml_count = len([e for e in context.elements if e.has_xml()])
-            print(f"   Fragments: {xml_count}")
+            try:
+                self._generate_xml_fragments(context)
+                xml_count = len([e for e in context.elements if e.has_xml()])
+                print(f"   Fragments: {xml_count}")
+                completed_stages.append('xml_fragments')
+            except Exception as xml_error:
+                print(f"   XML fragments generation failed: {xml_error}")
+                print("   Saving partial results...")
+                save_partial_results(
+                    context=context,
+                    output_dir=img_output_dir,
+                    failed_stage='xml_fragments',
+                    error=xml_error,
+                    completed_stages=completed_stages
+                )
+                raise ProcessingPartialResultError(
+                    message=f"XML fragment generation failed: {xml_error}",
+                    failed_stage='xml_fragments',
+                    completed_stages=completed_stages,
+                    partial_context=context
+                ) from xml_error
 
             if with_refinement:
                 print("\n[6] Metric evaluation...")
@@ -317,37 +366,93 @@ class Pipeline:
 
                 if should_refine:
                     print("\n[7] Refinement...")
-                    context.intermediate_results['bad_regions'] = bad_regions
-                    refine_result = self.refinement_processor.process(context)
-                    new_count = refine_result.metadata.get('new_elements_count', 0)
-                    print(f"   新增 {new_count} 个元素")
-                    
-                    if new_count > 0:
-                        refine_vis_path = os.path.join(img_output_dir, "refinement_result.png")
-                        new_elements = context.elements[-new_count:] if new_count > 0 else []
-                        self.refinement_processor.save_visualization(context, new_elements, refine_vis_path)
-                        print(f"   Saved: {refine_vis_path}")
+                    try:
+                        context.intermediate_results['bad_regions'] = bad_regions
+                        refine_result = self.refinement_processor.process(context)
+                        new_count = refine_result.metadata.get('new_elements_count', 0)
+                        print(f"   新增 {new_count} 个元素")
+
+                        if new_count > 0:
+                            refine_vis_path = os.path.join(img_output_dir, "refinement_result.png")
+                            new_elements = context.elements[-new_count:] if new_count > 0 else []
+                            self.refinement_processor.save_visualization(context, new_elements, refine_vis_path)
+                            print(f"   Saved: {refine_vis_path}")
+                    except Exception as refine_error:
+                        print(f"   Refinement step failed: {refine_error}")
+                        print("   Saving partial results...")
+                        save_partial_results(
+                            context=context,
+                            output_dir=img_output_dir,
+                            failed_stage='refinement',
+                            error=refine_error,
+                            completed_stages=completed_stages
+                        )
+                        raise ProcessingPartialResultError(
+                            message=f"Refinement failed: {refine_error}",
+                            failed_stage='refinement',
+                            completed_stages=completed_stages,
+                            partial_context=context
+                        ) from refine_error
                 elif not bad_regions:
                     print("\n[7] Refinement skipped (no bad regions)")
                 else:
                     print("\n[7] Refinement skipped (score ok)")
+                completed_stages.append('refinement')
 
             print("\n[8] Merge XML...")
-            merge_result = self.xml_merger.process(context)
+            try:
+                merge_result = self.xml_merger.process(context)
+
+                if not merge_result.success:
+                    error_msg = merge_result.error_message or "Unknown error"
+                    raise Exception(f"XML合并失败: {error_msg}")
+
+                output_path = merge_result.metadata.get('output_path')
+                completed_stages.append('merge_xml')
+                print(f"   Output: {output_path}")
+                print(f"\n{'='*60}\nDone.\n{'='*60}")
+
+                return output_path
+            except Exception as merge_error:
+                print(f"\n❌ XML合并失败: {merge_error}")
+                print("   Saving partial results...")
+                save_partial_results(
+                    context=context,
+                    output_dir=img_output_dir,
+                    failed_stage='merge_xml',
+                    error=merge_error,
+                    completed_stages=completed_stages
+                )
+                raise ProcessingPartialResultError(
+                    message=f"XML merge failed: {merge_error}",
+                    failed_stage='merge_xml',
+                    completed_stages=completed_stages,
+                    partial_context=context
+                ) from merge_error
             
-            if not merge_result.success:
-                raise Exception(f"XML合并失败: {merge_result.error_message}")
-            
-            output_path = merge_result.metadata.get('output_path')
-            print(f"   Output: {output_path}")
-            print(f"\n{'='*60}\nDone.\n{'='*60}")
-            
-            return output_path
-            
+        except ProcessingPartialResultError:
+            # Already handled and saved, just re-raise
+            raise
         except Exception as e:
             print(f"\n❌ 处理失败: {e}")
             import traceback
             traceback.print_exc()
+
+            # Save partial results for unexpected errors
+            if completed_stages:
+                print("\n   Saving partial results...")
+                try:
+                    save_partial_results(
+                        context=context,
+                        output_dir=img_output_dir,
+                        failed_stage='unknown',
+                        error=e,
+                        completed_stages=completed_stages
+                    )
+                    print(f"   Partial results saved to: {img_output_dir}")
+                except Exception as save_error:
+                    print(f"   Failed to save partial results: {save_error}")
+
             return None
     
     def _generate_xml_fragments(self, context: ProcessingContext):

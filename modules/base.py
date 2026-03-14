@@ -14,10 +14,15 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from dataclasses import dataclass, field
 import os
+import logging
 
 # 避免循环导入
 if TYPE_CHECKING:
     from .data_types import ElementInfo, ProcessingResult, ProcessingConfig, XMLFragment
+
+from .exceptions import EditBananaException, ProcessingPartialResultError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
