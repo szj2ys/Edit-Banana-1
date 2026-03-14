@@ -1,10 +1,11 @@
 "use client"
 
 import { useState } from "react"
-import { Loader2, Download, CheckCircle, AlertCircle } from "lucide-react"
+import { Loader2, Download, CheckCircle, AlertCircle, Share2 } from "lucide-react"
 import { track } from "@vercel/analytics"
 import { Button } from "@/components/ui/button"
 import { FileUpload } from "@/components/upload/file-upload"
+import { ShareModal } from "@/components/share/share-modal"
 import { uploadFile, getJobStatus, downloadResult, APIError } from "@/lib/api"
 import type { Job } from "@/lib/types"
 
@@ -16,6 +17,7 @@ export function UploadSection() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [resultUrl, setResultUrl] = useState<string | null>(null)
+  const [showShareModal, setShowShareModal] = useState(false)
 
   const handleFileSelect = (file: File) => {
     setSelectedFile(file)
@@ -163,13 +165,23 @@ export function UploadSection() {
               <p className="text-sm text-green-700 mb-4">
                 Your diagram has been converted and is ready to download.
               </p>
-              <Button
-                onClick={handleDownload}
-                className="w-full bg-green-600 hover:bg-green-700 text-white"
-              >
-                <Download className="mr-2 h-5 w-5" />
-                Download Result
-              </Button>
+              <div className="flex flex-col gap-3">
+                <Button
+                  onClick={handleDownload}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white"
+                >
+                  <Download className="mr-2 h-5 w-5" />
+                  Download Result
+                </Button>
+                <Button
+                  onClick={() => setShowShareModal(true)}
+                  variant="outline"
+                  className="w-full border-green-300 text-green-700 hover:bg-green-100"
+                >
+                  <Share2 className="mr-2 h-5 w-5" />
+                  Share Result
+                </Button>
+              </div>
             </div>
           )}
 
@@ -180,6 +192,16 @@ export function UploadSection() {
             </div>
           )}
         </div>
+
+        <ShareModal
+          isOpen={showShareModal}
+          onClose={() => setShowShareModal(false)}
+          options={{
+            title: "I just converted an image to an editable diagram!",
+            description: `Check out how I converted ${selectedFile?.name || "my image"} to an editable diagram using EditBanana.`,
+            url: typeof window !== "undefined" ? window.location.href : "https://editbanana.anxin6.cn",
+          }}
+        />
       </div>
     </section>
   )

@@ -1,81 +1,143 @@
 > !! 请勿提交此文件 !!
 
-# T0-cicd · Phase 0
+# T0-share-viral · Phase 0
 
-> 建立Git仓库、GitHub Actions CI/CD流水线，实现自动化测试和部署
+> 用户能够一键分享转换结果到社交媒体，并邀请好友获得额外转换次数奖励
 
 ## 上下文
 
-- **依赖**: 无（本Track是基础设施设置）
-- **边界**: 不修改业务代码，只添加CI/CD配置和仓库设置
-
-**当前状态:**
-- 本地git仓库已初始化
-- 尚未推送到GitHub
-- 无CI/CD配置
-- 前端：Next.js 15 + React 19，部署目标Vercel
-- 后端：Python FastAPI，部署目标Railway/Fly.io
+- **依赖**: 无 - 这是 Phase 0 任务
+- **边界**: 
+  - 仅修改 apps/web 下的文件
+  - 不涉及后端 API 改动（使用纯前端分享 SDK）
+  - 不修改核心转换逻辑，只添加分享 UI
 
 ## Tasks
 
-### 1. 创建GitHub仓库并推送代码
+### 1. 设计并实现分享/邀请类型定义
 
-- [ ] 在GitHub创建edit-banana仓库（public）
-- [ ] 添加README.md（项目介绍、技术栈、快速开始）
-- [ ] 配置.gitignore（确保node_modules, __pycache__, .env等被忽略）
-- [ ] 推送代码到main分支
-- **文件**: `README.md`（新建/更新）, `.gitignore`（更新）
-- **验收**: Given GitHub仓库创建, When 推送完成, Then main分支包含完整代码
-- **测试**: 手动验证 · `should see code on GitHub main branch`
+- [ ] 创建 `apps/web/src/types/share.ts`
+- **文件**: `apps/web/src/types/share.ts`（新建）
+- **验收**: Given 用户点击分享, When 选择分享渠道, Then 类型定义支持所有渠道
 
-### 2. 设置前端CI/CD (GitHub Actions)
+```typescript
+interface ShareOptions {
+  title: string;
+  description: string;
+  url: string;
+  imageUrl?: string;
+}
 
-- [ ] 创建前端构建和测试workflow
-- [ ] 配置Vercel自动部署（或使用GitHub Actions部署到Vercel）
-- [ ] 添加类型检查、lint检查、构建验证
-- **文件**: `.github/workflows/frontend.yml`（新建）
-- **验收**: Given PR创建, When 推送到分支, Then GitHub Actions运行测试和构建
-- **测试**: 手动验证 · `should see green checks on PR`
+type ShareChannel = 'twitter' | 'linkedin' | 'facebook' | 'wechat' | 'copy' | 'email';
 
-### 3. 设置后端CI/CD (GitHub Actions)
+interface ReferralInfo {
+  referralCode: string;
+  invitedCount: number;
+  bonusCredits: number;
+}
+```
 
-- [ ] 创建后端测试和构建workflow
-- [ ] 配置Python环境、依赖安装
-- [ ] 添加代码质量检查（black, ruff, mypy）
-- [ ] 配置Docker构建（如需要）
-- **文件**: `.github/workflows/backend.yml`（新建）
-- **验收**: Given PR修改后端代码, When 推送到分支, Then 后端workflow运行测试
-- **测试**: 手动验证 · `should see backend checks on PR`
+### 2. 实现 useShare Hook
 
-### 4. 配置部署流水线
+- [ ] 创建 `apps/web/src/hooks/use-share.ts`
+- **文件**: `apps/web/src/hooks/use-share.ts`（新建）
+- **验收**: Given 用户选择分享渠道, When 调用 share, Then 正确打开对应分享窗口
+- **测试**: 单元测试 · `should open Twitter share dialog when channel is twitter`
+- **测试**: 单元测试 · `should copy link to clipboard when channel is copy`
 
-- [ ] 配置Vercel部署（前端）- 可设置VERCEL_TOKEN
-- [ ] 配置后端部署配置（Railway或Fly.io）
-- [ ] 添加部署状态通知
-- [ ] 创建部署文档
-- **文件**: `.github/workflows/deploy.yml`（新建）, `docs/deployment.md`（新建）
-- **验收**: Given 合并到main分支, When CI通过, Then 自动部署到生产环境
-- **测试**: 手动验证 · `should auto-deploy on main merge`
+功能需求：
+- `share(channel, options)` - 执行分享
+- `shareToTwitter(options)` - 分享到 Twitter/X
+- `shareToLinkedIn(options)` - 分享到 LinkedIn
+- `shareToFacebook(options)` - 分享到 Facebook
+- `copyLink(url)` - 复制链接到剪贴板
+- `shareViaEmail(options)` - 邮件分享
 
-### 5. 设置分支保护和PR模板
+### 3. 实现 useReferral Hook (模拟)
 
-- [ ] 配置分支保护规则（需要PR、需要review、需要CI通过）
-- [ ] 创建PR模板
-- [ ] 创建Issue模板
-- **文件**: `.github/pull_request_template.md`（新建）, `.github/ISSUE_TEMPLATE/`（新建目录）
-- **验收**: Given 尝试直接推送到main, When 推送, Then 被拒绝，需要走PR流程
-- **测试**: 手动验证 · `should enforce PR workflow`
+- [ ] 创建 `apps/web/src/hooks/use-referral.ts`
+- **文件**: `apps/web/src/hooks/use-referral.ts`（新建）
+- **验收**: Given 用户访问页面, When 组件挂载, Then 生成或恢复推荐码
 
-实现好后需要使用code-simplifier agent进行代码优化。
+功能需求（纯前端模拟）：
+- `getReferralCode()` - 获取当前用户的推荐码（基于 localStorage）
+- `generateReferralLink()` - 生成带推荐码的分享链接
+- `trackReferral(code)` - 模拟记录邀请（实际后端实现后替换）
+
+### 4. 创建 ShareModal 组件
+
+- [ ] 创建 `apps/web/src/app/components/share-modal.tsx`
+- **文件**: `apps/web/src/app/components/share-modal.tsx`（新建）
+- **验收**: Given 用户点击分享按钮, When 模态框打开, Then 显示所有分享选项
+- **测试**: 组件测试 · `should render all share channels`
+- **测试**: 组件测试 · `should close when clicking outside or close button`
+
+UI 设计：
+- 模态框标题："Share Your Conversion"
+- 分享渠道图标网格（Twitter、LinkedIn、Facebook、复制链接、邮件）
+- 每个渠道有对应图标和标签
+- 关闭按钮和点击外部关闭
+- 可选：转换结果预览缩略图
+
+### 5. 创建 ReferralBanner 组件
+
+- [ ] 创建 `apps/web/src/app/components/referral-banner.tsx`
+- **文件**: `apps/web/src/app/components/referral-banner.tsx`（新建）
+- **验收**: Given 用户查看页面, When 滚动到合适位置, Then 看到邀请好友横幅
+- **测试**: 组件测试 · `should display referral code and copy button`
+
+UI 设计：
+- 横幅标题："Invite Friends, Get Free Credits"
+- 推荐码展示（可复制）
+- "Copy Link" 按钮
+- 邀请进度显示（模拟）："You've invited X friends"
+- 奖励说明："Each invite gives you +5 conversions"
+
+### 6. 在 UploadSection 添加分享入口
+
+- [ ] 修改转换成功后的 UI，添加分享按钮
+- **文件**: `apps/web/src/app/sections/upload-section.tsx`（修改）
+- **验收**: Given 转换成功完成, When 显示下载按钮, Then 同时显示分享按钮
+- **测试**: 集成测试 · `should show share button after conversion success`
+
+修改点：
+- 在下载按钮旁边添加分享按钮
+- 点击后打开 ShareModal
+
+### 7. 在首页集成 ReferralBanner
+
+- [ ] 修改 `apps/web/src/app/page.tsx` 添加邀请横幅
+- **文件**: `apps/web/src/app/page.tsx`（修改）
+- **验收**: Given 用户访问首页, When 页面加载, Then 在 Hero 区域下方看到邀请横幅
+- **测试**: 集成测试 · `should render referral banner in page`
+
+布局：
+- 放在 Hero 和 UploadSection 之间
+- 使用醒目的背景色（黄色/品牌色）
+- 移动端适配
+
+### 8. 创建 ShareSection（可选扩展）
+
+- [ ] 创建 `apps/web/src/app/sections/share-section.tsx`
+- **文件**: `apps/web/src/app/sections/share-section.tsx`（新建）
+- **验收**: Given 用户滚动到分享区域, When 查看内容, Then 看到社交证明和分享 CTA
+
+内容：
+- 社交证明："Join 10,000+ users"
+- 分享 CTA 按钮
+- 用户评价/推荐语
 
 ## Done When
 
 - [ ] 所有 Tasks checkbox 已勾选
-- [ ] GitHub仓库可见，代码已推送
-- [ ] GitHub Actions工作流正常运行
-- [ ] PR创建时有自动化检查
-- [ ] 合并到main后自动部署
-- [ ] 分支保护规则生效
+- [ ] `npm run test` 全部通过
+- [ ] `npm run build` 无报错
+- [ ] 无 lint / type 错误
+- [ ] 手动验证：
+  - 转换成功后可以打开分享模态框
+  - Twitter 分享链接正确
+  - 复制链接功能可用
+  - 推荐码生成和展示正常
 
 ---
 
@@ -83,9 +145,7 @@
 
 | 变更类型          | 要求                           |
 | ----------------- | ------------------------------ |
-| CI/CD配置         | 手动测试：创建测试PR验证流水线  |
-| 部署脚本          | 手动测试：验证部署命令可执行    |
-| 文档              | 人工review：步骤清晰可复现      |
-
-- **文件位置**: 与源文件同目录
-- **Case 命名**: `should {预期行为} when {条件}`
+| 工具函数 / 纯逻辑 | 单元测试：核心路径 + 边界 case |
+| UI 组件           | 组件测试：渲染 + 交互 + 状态   |
+| 跨模块 / API 交互 | 集成测试：模拟完整用户流程     |
+| 合入 main 前      | 冒烟测试：构建 + 全量测试通过  |
