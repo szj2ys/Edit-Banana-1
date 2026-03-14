@@ -1,6 +1,6 @@
 "use client"
 
-import { Banana } from "lucide-react"
+import { Banana, History } from "lucide-react"
 
 export function Navbar() {
   return (
@@ -14,6 +14,13 @@ export function Navbar() {
             <span className="text-xl font-bold text-gray-900">Edit Banana</span>
           </div>
           <div className="flex items-center gap-4">
+            <a
+              href="#history"
+              className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+            >
+              <History className="w-4 h-4" />
+              History
+            </a>
             <a
               href="https://github.com/yourusername/edit-banana"
               target="_blank"
