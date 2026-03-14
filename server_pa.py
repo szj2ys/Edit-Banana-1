@@ -18,7 +18,7 @@ import uvicorn
 
 app = FastAPI(
     title="Edit Banana API",
-    description="Universal Content Re-Editor — image/PDF to editable DrawIO or PPTX",
+    description="Image to editable DrawIO (XML) — upload a diagram image, get DrawIO XML.",
     version="1.0.0",
 )
 
@@ -35,14 +35,13 @@ def root():
 
 @app.post("/convert")
 async def convert(file: UploadFile = File(...)):
-    """Upload image or PDF and return editable output (DrawIO XML or PPTX)."""
-    # Validate type
+    """Upload an image and get editable DrawIO XML. Supported: PNG, JPG, BMP, TIFF, WebP."""
     name = file.filename or ""
     ext = Path(name).suffix.lower()
-    if ext not in {".png", ".jpg", ".jpeg", ".pdf", ".bmp", ".tiff", ".webp"}:
-        raise HTTPException(400, "Unsupported format. Use image or PDF.")
+    allowed = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
+    if ext not in allowed:
+        raise HTTPException(400, f"Unsupported format. Use one of: {', '.join(sorted(allowed))}.")
 
-    # Save to temp and run pipeline
     config_path = os.path.join(PROJECT_ROOT, "config", "config.yaml")
     if not os.path.exists(config_path):
         raise HTTPException(503, "Server not configured (missing config/config.yaml)")
@@ -70,7 +69,6 @@ async def convert(file: UploadFile = File(...)):
             )
             if not result_path or not os.path.exists(result_path):
                 raise HTTPException(500, "Conversion failed")
-            # In a full implementation you would return the file or a download URL
             return {"success": True, "output_path": result_path}
         finally:
             try:

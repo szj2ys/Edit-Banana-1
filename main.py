@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Edit Banana — CLI entry. Image/PDF to editable DrawIO XML.
+Edit Banana — CLI entry: image to editable DrawIO XML.
 
-Pipeline: Input -> Segmentation (SAM3) -> Text Extraction (OCR) -> XML/PPTX generation.
-See README for setup (config, models, env).
+Pipeline: input image -> preprocess -> text OCR -> SAM3 segmentation -> shape/icon processing -> XML merge -> output .drawio.
+Requires: config/config.yaml (sam3.checkpoint_path, sam3.bpe_path), SAM3 library and weights, Tesseract or PaddleOCR.
+See README and docs/SETUP_SAM3.md.
 
 Usage:
     python main.py -i input/test.png
@@ -16,51 +17,45 @@ Usage:
 import os
 import sys
 import argparse
+import warnings
 import yaml
 from pathlib import Path
 from typing import Optional, List
 
-# 添加项目根目录到 sys.path
+# Skip PaddleX model host connectivity check to avoid startup delay
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+# Suppress requests urllib3/chardet version warning
+warnings.filterwarnings("ignore", message=".*doesn't match a supported version.*")
+
+# Project root on path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
 from modules import (
-    # 核心处理器
+    # Core processors
     Sam3InfoExtractor,
     IconPictureProcessor,
     BasicShapeProcessor,
-    ArrowProcessor,
     XMLMerger,
     MetricEvaluator,
     RefinementProcessor,
-
-    # 文字处理（已整合到 modules/text/）
+    
+    # Text (modules/text/)
     TextRestorer,
 
-    # 上下文和数据类型
+    # Context and data types
     ProcessingContext,
     ProcessingResult,
     ElementInfo,
     LayerLevel,
     get_layer_level,
-
-    # 异常体系与错误恢复
-    EditBananaException,
-    ProcessingPartialResultError,
-    save_partial_results,
 )
 
-# 导入分组枚举，方便按需提取
+# Prompt groups enum
 from modules.sam3_info_extractor import PromptGroup
 
-# 超分模型（可选依赖）
-from modules.icon_picture_processor import UpscaleModel, SPANDREL_AVAILABLE
-
-# 文字处理模块可用性标记（依赖 ocr/coord_processor 等，缺失时为 False）
+# Text module available (depends on ocr/coord_processor etc.)
 TEXT_MODULE_AVAILABLE = TextRestorer is not None
-
-# 条件超分阈值配置
-UPSCALE_MIN_DIMENSION = 800  # 原图短边小于此值时触发超分
 
 
 # ======================== config ========================
@@ -69,7 +64,7 @@ def load_config() -> dict:
     config_path = os.path.join(PROJECT_ROOT, "config", "config.yaml")
     
     if not os.path.exists(config_path):
-        print(f"警告：配置文件不存在 {config_path}，使用默认配置")
+        print(f"Warning: config file not found at {config_path}, using defaults")
         return {
             'paths': {
                 'input_dir': './input',
@@ -91,21 +86,19 @@ class Pipeline:
         self._sam3_extractor = None
         self._icon_processor = None
         self._shape_processor = None
-        self._arrow_processor = None
         self._xml_merger = None
         self._metric_evaluator = None
         self._refinement_processor = None
-        self._upscale_model = None
-        
-        # 超分配置
-        self._upscale_min_dimension = self.config.get('upscale', {}).get('min_dimension', UPSCALE_MIN_DIMENSION)
-        self._upscale_enabled = self.config.get('upscale', {}).get('enabled', True)
     
     @property
     def text_restorer(self):
         """OCR/text step; None if deps missing."""
         if self._text_restorer is None and TextRestorer is not None:
-            self._text_restorer = TextRestorer(formula_engine='none')
+            ocr_engine = (self.config.get("ocr") or {}).get("engine", "tesseract")
+            self._text_restorer = TextRestorer(
+                formula_engine="none",
+                ocr_engine=ocr_engine,
+            )
         return self._text_restorer
     
     @property
@@ -117,7 +110,9 @@ class Pipeline:
     @property
     def icon_processor(self) -> IconPictureProcessor:
         if self._icon_processor is None:
-            self._icon_processor = IconPictureProcessor()
+            rmbg_cfg = self.config.get("rmbg") or {}
+            rmbg_path = rmbg_cfg.get("model_path")
+            self._icon_processor = IconPictureProcessor(rmbg_model_path=rmbg_path)
         return self._icon_processor
     
     @property
@@ -125,12 +120,6 @@ class Pipeline:
         if self._shape_processor is None:
             self._shape_processor = BasicShapeProcessor()
         return self._shape_processor
-    
-    @property
-    def arrow_processor(self) -> ArrowProcessor:
-        if self._arrow_processor is None:
-            self._arrow_processor = ArrowProcessor()
-        return self._arrow_processor
     
     @property
     def xml_merger(self) -> XMLMerger:
@@ -150,66 +139,6 @@ class Pipeline:
             self._refinement_processor = RefinementProcessor()
         return self._refinement_processor
     
-    @property
-    def upscale_model(self) -> UpscaleModel:
-        """Optional upscale (lazy)."""
-        if self._upscale_model is None:
-            self._upscale_model = UpscaleModel(model_path=None)  # 使用默认路径
-        return self._upscale_model
-    
-    def _preprocess_image(self, image_path: str, output_dir: str) -> tuple:
-        """Optional upscale when image is small. Returns (path, was_upscaled, scale)."""
-        from PIL import Image
-
-        if not self._upscale_enabled:
-            return image_path, False, 1.0
-        
-        # 检查依赖是否可用
-        if not SPANDREL_AVAILABLE:
-            print("   [预处理] 超分依赖未安装，跳过")
-            return image_path, False, 1.0
-        
-        # 读取原图尺寸
-        with Image.open(image_path) as img:
-            width, height = img.size
-            min_dim = min(width, height)
-        
-        # 判断是否需要超分
-        if min_dim >= self._upscale_min_dimension:
-            print(f"   [预处理] 原图尺寸 {width}x{height}，无需超分")
-            return image_path, False, 1.0
-        
-        print(f"   [预处理] 原图尺寸 {width}x{height} < {self._upscale_min_dimension}，启动超分...")
-        
-        # 加载超分模型
-        try:
-            self.upscale_model.load()
-            
-            if self.upscale_model._model is None:
-                print("   [预处理] 超分模型不可用，跳过")
-                return image_path, False, 1.0
-            
-            # 执行超分
-            with Image.open(image_path) as img:
-                img_rgb = img.convert("RGB")
-                upscaled = self.upscale_model.upscale(img_rgb)
-            
-            # 保存超分后的图片
-            upscaled_path = os.path.join(output_dir, "upscaled_input.png")
-            upscaled.save(upscaled_path)
-            
-            new_width, new_height = upscaled.size
-            scale_factor = new_width / width
-            
-            print(f"   [预处理] 超分完成: {width}x{height} → {new_width}x{new_height} ({scale_factor:.1f}x)")
-            print(f"   [预处理] 保存至: {upscaled_path}")
-            
-            return upscaled_path, True, scale_factor
-            
-        except Exception as e:
-            print(f"   [预处理] 超分失败: {e}，使用原图继续")
-            return image_path, False, 1.0
-    
     def process_image(self,
                       image_path: str,
                       output_dir: str = None,
@@ -218,10 +147,10 @@ class Pipeline:
                       groups: List[PromptGroup] = None) -> Optional[str]:
         """Run pipeline on one image. Returns output XML path or None."""
         print(f"\n{'='*60}")
-        print(f"开始处理: {image_path}")
+        print(f"Processing: {image_path}")
         print(f"{'='*60}")
         
-        # 准备输出目录
+        # Output directory
         if output_dir is None:
             output_dir = self.config.get('paths', {}).get('output_dir', './output')
         
@@ -230,20 +159,13 @@ class Pipeline:
         os.makedirs(img_output_dir, exist_ok=True)
         
         print("\n[0] Preprocess...")
-        processed_image_path, was_upscaled, scale_factor = self._preprocess_image(image_path, img_output_dir)
-
         context = ProcessingContext(
-            image_path=processed_image_path,
+            image_path=image_path,
             output_dir=img_output_dir
         )
-        
-        # 记录超分信息到上下文
         context.intermediate_results['original_image_path'] = image_path
-        context.intermediate_results['was_upscaled'] = was_upscaled
-        context.intermediate_results['upscale_factor'] = scale_factor
-
-        # 记录阶段完成情况用于错误恢复
-        completed_stages = []
+        context.intermediate_results['was_upscaled'] = False
+        context.intermediate_results['upscale_factor'] = 1.0
 
         try:
             if with_text and self.text_restorer is not None:
@@ -257,21 +179,16 @@ class Pipeline:
                     print(f"   Saved: {text_output_path}")
                 except Exception as e:
                     print(f"   Text step failed: {e}")
-                    import traceback
-                    traceback.print_exc()
                     print("   Continuing without text...")
-                completed_stages.append('text_extraction')
             elif with_text:
                 print("\n[1] Text extraction (skipped - deps)")
-                completed_stages.append('text_extraction')
             else:
                 print("\n[1] Text extraction (skipped)")
-                completed_stages.append('text_extraction')
 
             print("\n[2] Segmentation (SAM3)...")
-            
+
             if groups:
-                # 指定组提取
+                # Extract by group
                 all_elements = []
                 for group in groups:
                     result = self.sam3_extractor.extract_by_group(context, group)
@@ -282,10 +199,10 @@ class Pipeline:
                 context.canvas_width = result.canvas_width
                 context.canvas_height = result.canvas_height
             else:
-                # 全部组提取
+                # Full extraction
                 result = self.sam3_extractor.process(context)
                 if not result.success:
-                    raise Exception(f"SAM3提取失败: {result.error_message}")
+                    raise Exception(f"SAM3 extraction failed: {result.error_message}")
                 context.elements = result.elements
                 context.canvas_width = result.canvas_width
                 context.canvas_height = result.canvas_height
@@ -295,62 +212,20 @@ class Pipeline:
             self.sam3_extractor.save_visualization(context, vis_path)
             meta_path = os.path.join(img_output_dir, "sam3_metadata.json")
             self.sam3_extractor.save_metadata(context, meta_path)
-            completed_stages.append('segmentation')
 
             print("\n[3] Shape/icon processing...")
             result = self.icon_processor.process(context)
             print(f"   Icons: {result.metadata.get('processed_count', 0)}")
             result = self.shape_processor.process(context)
             print(f"   Shapes: {result.metadata.get('processed_count', 0)}")
-            completed_stages.append('shape_processing')
 
-            print("\n[4] Arrows...")
-            try:
-                result = self.arrow_processor.process(context)
-                print(f"   Arrows: {result.metadata.get('arrows_processed', 0)}")
-                completed_stages.append('arrows')
-            except Exception as arrow_error:
-                print(f"   Arrows step failed: {arrow_error}")
-                print("   Saving partial results...")
-                save_partial_results(
-                    context=context,
-                    output_dir=img_output_dir,
-                    failed_stage='arrows',
-                    error=arrow_error,
-                    completed_stages=completed_stages
-                )
-                raise ProcessingPartialResultError(
-                    message=f"Arrow processing failed: {arrow_error}",
-                    failed_stage='arrows',
-                    completed_stages=completed_stages,
-                    partial_context=context
-                ) from arrow_error
-
-            print("\n[5] XML fragments...")
-            try:
-                self._generate_xml_fragments(context)
-                xml_count = len([e for e in context.elements if e.has_xml()])
-                print(f"   Fragments: {xml_count}")
-                completed_stages.append('xml_fragments')
-            except Exception as xml_error:
-                print(f"   XML fragments generation failed: {xml_error}")
-                print("   Saving partial results...")
-                save_partial_results(
-                    context=context,
-                    output_dir=img_output_dir,
-                    failed_stage='xml_fragments',
-                    error=xml_error,
-                    completed_stages=completed_stages
-                )
-                raise ProcessingPartialResultError(
-                    message=f"XML fragment generation failed: {xml_error}",
-                    failed_stage='xml_fragments',
-                    completed_stages=completed_stages,
-                    partial_context=context
-                ) from xml_error
+            print("\n[4] XML fragments...")
+            self._generate_xml_fragments(context)
+            xml_count = len([e for e in context.elements if e.has_xml()])
+            print(f"   Fragments: {xml_count}")
 
             if with_refinement:
-                print("\n[6] Metric evaluation...")
+                print("\n[5] Metric evaluation...")
                 eval_result = self.metric_evaluator.process(context)
                 
                 overall_score = eval_result.metadata.get('overall_score', 0)
@@ -365,127 +240,65 @@ class Pipeline:
                 should_refine = overall_score < REFINEMENT_THRESHOLD and bad_regions
 
                 if should_refine:
-                    print("\n[7] Refinement...")
-                    try:
-                        context.intermediate_results['bad_regions'] = bad_regions
-                        refine_result = self.refinement_processor.process(context)
-                        new_count = refine_result.metadata.get('new_elements_count', 0)
-                        print(f"   新增 {new_count} 个元素")
-
-                        if new_count > 0:
-                            refine_vis_path = os.path.join(img_output_dir, "refinement_result.png")
-                            new_elements = context.elements[-new_count:] if new_count > 0 else []
-                            self.refinement_processor.save_visualization(context, new_elements, refine_vis_path)
-                            print(f"   Saved: {refine_vis_path}")
-                    except Exception as refine_error:
-                        print(f"   Refinement step failed: {refine_error}")
-                        print("   Saving partial results...")
-                        save_partial_results(
-                            context=context,
-                            output_dir=img_output_dir,
-                            failed_stage='refinement',
-                            error=refine_error,
-                            completed_stages=completed_stages
-                        )
-                        raise ProcessingPartialResultError(
-                            message=f"Refinement failed: {refine_error}",
-                            failed_stage='refinement',
-                            completed_stages=completed_stages,
-                            partial_context=context
-                        ) from refine_error
+                    print("\n[6] Refinement...")
+                    context.intermediate_results['bad_regions'] = bad_regions
+                    refine_result = self.refinement_processor.process(context)
+                    new_count = refine_result.metadata.get('new_elements_count', 0)
+                    print(f"   Added {new_count} elements")
+                    
+                    if new_count > 0:
+                        refine_vis_path = os.path.join(img_output_dir, "refinement_result.png")
+                        new_elements = context.elements[-new_count:] if new_count > 0 else []
+                        self.refinement_processor.save_visualization(context, new_elements, refine_vis_path)
+                        print(f"   Saved: {refine_vis_path}")
                 elif not bad_regions:
-                    print("\n[7] Refinement skipped (no bad regions)")
+                    print("\n[6] Refinement skipped (no bad regions)")
                 else:
-                    print("\n[7] Refinement skipped (score ok)")
-                completed_stages.append('refinement')
+                    print("\n[6] Refinement skipped (score ok)")
 
-            print("\n[8] Merge XML...")
-            try:
-                merge_result = self.xml_merger.process(context)
-
-                if not merge_result.success:
-                    error_msg = merge_result.error_message or "Unknown error"
-                    raise Exception(f"XML合并失败: {error_msg}")
-
-                output_path = merge_result.metadata.get('output_path')
-                completed_stages.append('merge_xml')
-                print(f"   Output: {output_path}")
-                print(f"\n{'='*60}\nDone.\n{'='*60}")
-
-                return output_path
-            except Exception as merge_error:
-                print(f"\n❌ XML合并失败: {merge_error}")
-                print("   Saving partial results...")
-                save_partial_results(
-                    context=context,
-                    output_dir=img_output_dir,
-                    failed_stage='merge_xml',
-                    error=merge_error,
-                    completed_stages=completed_stages
-                )
-                raise ProcessingPartialResultError(
-                    message=f"XML merge failed: {merge_error}",
-                    failed_stage='merge_xml',
-                    completed_stages=completed_stages,
-                    partial_context=context
-                ) from merge_error
+            print("\n[7] Merge XML...")
+            merge_result = self.xml_merger.process(context)
             
-        except ProcessingPartialResultError:
-            # Already handled and saved, just re-raise
-            raise
+            if not merge_result.success:
+                raise Exception(f"XML merge failed: {merge_result.error_message}")
+            
+            output_path = merge_result.metadata.get('output_path')
+            print(f"   Output: {output_path}")
+            print(f"\n{'='*60}\nDone.\n{'='*60}")
+            
+            return output_path
+            
         except Exception as e:
-            print(f"\n❌ 处理失败: {e}")
+            print(f"\nFailed: {e}")
             import traceback
             traceback.print_exc()
-
-            # Save partial results for unexpected errors
-            if completed_stages:
-                print("\n   Saving partial results...")
-                try:
-                    save_partial_results(
-                        context=context,
-                        output_dir=img_output_dir,
-                        failed_stage='unknown',
-                        error=e,
-                        completed_stages=completed_stages
-                    )
-                    print(f"   Partial results saved to: {img_output_dir}")
-                except Exception as save_error:
-                    print(f"   Failed to save partial results: {save_error}")
-
             return None
     
     def _generate_xml_fragments(self, context: ProcessingContext):
-        """Generate XML for elements that do not have one yet."""
+        """Generate XML for elements that do not have one yet. Arrows are treated as icon (image crop)."""
         for elem in context.elements:
             if elem.has_xml():
                 continue
             
-            # 根据元素类型生成XML
             elem_type = elem.element_type.lower()
             
-            if elem_type in {'icon', 'picture', 'logo', 'chart', 'function_graph'}:
-                # 图片类：使用base64图片
+            if elem_type in {'icon', 'picture', 'logo', 'chart', 'function_graph', 'arrow', 'line', 'connector'}:
+                # Image/arrow: use base64 image
                 if elem.base64:
                     style = f"shape=image;imageAspect=0;aspect=fixed;verticalLabelPosition=bottom;verticalAlign=top;image=data:image/png,{elem.base64}"
                 else:
                     style = "rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;"
                 elem.layer_level = LayerLevel.IMAGE.value
                 
-            elif elem_type in {'arrow', 'line', 'connector'}:
-                # 箭头类
-                style = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;"
-                elem.layer_level = LayerLevel.ARROW.value
-                
             elif elem_type in {'section_panel', 'title_bar'}:
-                # 背景/容器类
+                # Background/container
                 fill = elem.fill_color or "#ffffff"
                 stroke = elem.stroke_color or "#000000"
                 style = f"rounded=0;whiteSpace=wrap;html=1;fillColor={fill};strokeColor={stroke};dashed=1;"
                 elem.layer_level = LayerLevel.BACKGROUND.value
                 
             else:
-                # 基本图形
+                # Basic shape
                 fill = elem.fill_color or "#ffffff"
                 stroke = elem.stroke_color or "#000000"
                 
@@ -502,7 +315,7 @@ class Pipeline:
                 
                 elem.layer_level = LayerLevel.BASIC_SHAPE.value
             
-            # 生成mxCell XML
+            # Build mxCell XML
             elem.xml_fragment = f'''<mxCell id="{elem.id}" parent="1" vertex="1" value="" style="{style}">
   <mxGeometry x="{elem.bbox.x1}" y="{elem.bbox.y1}" width="{elem.bbox.width}" height="{elem.bbox.height}" as="geometry"/>
 </mxCell>'''
@@ -523,34 +336,34 @@ Examples:
     )
     
     parser.add_argument("-i", "--input", type=str, 
-                        help="输入图片路径（不指定则处理input/目录下所有图片）")
+                        help="Input image path (omit to process all images in input/)")
     parser.add_argument("-o", "--output", type=str, 
-                        help="输出目录（默认：./output）")
+                        help="Output directory (default: ./output)")
     parser.add_argument("--refine", action="store_true",
-                        help="启用质量评估和二次处理")
+                        help="Enable quality evaluation and refinement")
     parser.add_argument("--no-text", action="store_true",
-                        help="跳过文字处理（不调用 OCR）")
+                        help="Skip text step (no OCR)")
     parser.add_argument("--groups", nargs='+', 
                         choices=['image', 'arrow', 'shape', 'background'],
-                        help="指定要处理的提示词组（默认全部）")
+                        help="Prompt groups to process (default: all)")
     parser.add_argument("--show-prompts", action="store_true",
-                        help="显示当前词库配置")
+                        help="Show prompt config")
     
     args = parser.parse_args()
     
-    # 显示词库配置
+    # Show prompt config
     if args.show_prompts:
         extractor = Sam3InfoExtractor()
         extractor.print_prompt_groups()
         return
     
-    # 加载配置
+    # Load config
     config = load_config()
     
-    # 创建流水线
+    # Create pipeline
     pipeline = Pipeline(config)
     
-    # 解析分组参数
+    # Parse group args
     groups = None
     if args.groups:
         group_map = {
@@ -561,27 +374,27 @@ Examples:
         }
         groups = [group_map[g] for g in args.groups]
     
-    # 确定输出目录
+    # Output dir
     output_dir = args.output or config.get('paths', {}).get('output_dir', './output')
     os.makedirs(output_dir, exist_ok=True)
     
-    # 收集待处理图片
+    # Collect images
     image_paths = []
     supported_formats = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
     
     if args.input:
-        # 指定单张图片
+        # Single image
         if not os.path.exists(args.input):
-            print(f"❌ 错误：文件不存在 {args.input}")
+            print(f"Error: file not found {args.input}")
             sys.exit(1)
         image_paths.append(args.input)
     else:
-        # 批量处理input/目录
+        # Batch from input/
         input_dir = config.get('paths', {}).get('input_dir', './input')
         
         if not os.path.exists(input_dir):
-            print(f"❌ 错误：输入目录不存在 {input_dir}")
-            print(f"   请创建目录并放入图片，或使用 -i 参数指定图片路径")
+            print(f"Error: input directory does not exist: {input_dir}")
+            print(f"   Create it and add images, or use -i to specify an image path")
             sys.exit(1)
         
         for file in os.listdir(input_dir):
@@ -590,12 +403,12 @@ Examples:
                 image_paths.append(os.path.join(input_dir, file))
         
         if not image_paths:
-            print(f"❌ 错误：{input_dir} 目录下没有找到支持的图片文件")
-            print(f"   支持的格式: {', '.join(supported_formats)}")
+            print(f"Error: no supported image files in {input_dir}")
+            print(f"   Supported formats: {', '.join(supported_formats)}")
             sys.exit(1)
     
-    # 处理图片
-    print(f"\n即将处理 {len(image_paths)} 张图片...")
+    # Process
+    print(f"\nProcessing {len(image_paths)} image(s)...")
     
     success_count = 0
     for img_path in image_paths:
@@ -609,10 +422,10 @@ Examples:
         if result:
             success_count += 1
     
-    # 汇总
+    # Summary
     print(f"\n{'='*60}")
-    print(f"处理完成: {success_count}/{len(image_paths)} 张图片成功")
-    print(f"输出目录: {output_dir}")
+    print(f"Done: {success_count}/{len(image_paths)} succeeded")
+    print(f"Output: {output_dir}")
     print(f"{'='*60}")
 
 

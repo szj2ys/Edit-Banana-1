@@ -28,7 +28,7 @@ Powered by SAM 3 and multimodal large models, it enables high-fidelity reconstru
 </p>
 
 <p align="center">
-  👆 <b>Click above or https://editbanana.anxin6.cn/ to try Edit Banana online!</b> Upload an image or pdf, get <b>editable DrawIO (XML) or PPTX</b> in seconds. 
+  👆 <b>Click above or https://editbanana.anxin6.cn/ to try Edit Banana online!</b> Upload an image to get <b>editable DrawIO (XML)</b> in seconds. 
   <b>Please note</b>: Our GitHub repository currently trails behind our web-based service. For the most up-to-date features and performance, we recommend using our web platform.
 </p>
 
@@ -42,7 +42,7 @@ Welcome to join our WeChat group to discuss and exchange ideas! Scan the QR code
   <em>Scan to join the Edit Banana community</em>
 </p>
 
-> 💡 If the QR code has expired, please submit an [Issue](https://github.com/XiangjianYi/Image2DrawIO/issues) to request an updated one.
+> 💡 If the QR code has expired, please submit an [Issue](https://github.com/BIT-DataLab/Edit-Banana/issues) to request an updated one.
 
 ---
 
@@ -50,7 +50,7 @@ Welcome to join our WeChat group to discuss and exchange ideas! Scan the QR code
 ### High-Definition Input-Output Comparison (3 Typical Scenarios)
 To demonstrate the high-fidelity conversion effect, we provides one-to-one comparisons between 3 scenarios of "original static formats" and "editable reconstruction results". All elements can be individually dragged, styled, and modified.
 
-#### Scenario 1: Figures to Drawio(xml, svg, pptx)
+#### Scenario 1: Figures to DrawIO (XML, SVG)
 
 | Example No. | Original Static Diagram (Input · Non-editable) | DrawIO Reconstruction Result (Output · Fully Editable) |
 |--------------|-----------------------------------------------|--------------------------------------------------------|
@@ -59,10 +59,7 @@ To demonstrate the high-fidelity conversion effect, we provides one-to-one compa
 | Example 3: Technical Schematic | <img src="/static/demo/original_3.jpg" width="400" alt="Original Diagram 3" style="border: 1px solid #eee; border-radius: 4px;"/> | <img src="/static/demo/recon_3.png" width="400" alt="Reconstruction Result 3" style="border: 1px solid #eee; border-radius: 4px;"/> |
 | Example 4: Scientific Formula Diagram | <img src="/static/demo/original_4.jpg" width="400" alt="Original Diagram 4" style="border: 1px solid #eee; border-radius: 4px;"/> | <img src="/static/demo/recon_4.png" width="400" alt="Reconstruction Result 4" style="border: 1px solid #eee; border-radius: 4px;"/> |
 
-#### Scenario 2: PDF to PPTX
-
-
-#### Scenario 3: Human in the Loop Modification
+#### Scenario 2: Human in the Loop Modification
 
 > ✨ Conversion Highlights:
 > 1.  Preserves the layout logic, color matching, and element hierarchy of the original diagram
@@ -85,30 +82,33 @@ To demonstrate the high-fidelity conversion effect, we provides one-to-one compa
 
 ## Architecture Pipeline
 
-1.  **Input**: Image (PNG/JPG) or PDF.
+1.  **Input**: Image (PNG/JPG/BMP/TIFF/WebP).
 2.  **Segmentation (SAM3)**: Using our fine-tuned SAM3 mask decoder.
-4.  **Text Extraction (Parallel)**:
+3.  **Text Extraction (Parallel)**:
     *   Local OCR (Tesseract) detects text bounding boxes.
     *   High-res crops of text/formula regions are sent to Pix2Text for LaTeX conversion.
-5.  **XML/PPTX Generation**: Merging spatial data from our fine-tuned SAM3 and text OCR results.
+4.  **DrawIO XML Generation**: Merging spatial data from SAM3 and text OCR results.
 
 ## Project Structure
 
 ```
-sam3_workflow/
-├── config/                 # Configuration files
-├── flowchart_text/         # OCR & Text Extraction Module
-│   ├── src/                # OCR source (local Tesseract, Pix2Text, alignment)
-│   └── main.py             # OCR Entry point
+Edit-Banana/
+├── config/                 # Configuration files (copy config.yaml.example → config.yaml)
+├── flowchart_text/         # OCR & Text Extraction Module (standalone entry)
+│   ├── src/
+│   └── main.py             # OCR-only entry point
 ├── input/                  # [Manual] Input images directory
-├── models/                 # [Manual] Model weights (SAM3)
+├── models/                 # [Manual] Model weights (SAM3) and optional BPE vocab
 ├── output/                 # [Manual] Results directory
-├── sam3/                   # SAM3 Model Library
-├── scripts/                # Utility Scripts
-│   └── merge_xml.py        # XML Merging & Orchestration
-├── main.py                 # CLI Entry point (Modular Pipeline)
-├── server_pa.py            # FastAPI Backend Server (Service-based)
-└── requirements.txt        # Python dependencies
+├── sam3/                   # SAM3 library (see Installation: install from facebookresearch/sam3)
+├── sam3_service/           # SAM3 HTTP service (optional, for multi-process deployment)
+├── scripts/
+│   ├── setup_sam3.sh       # Install SAM3 lib and copy BPE to models/
+│   ├── setup_rmbg.py       # Download RMBG model from ModelScope to models/rmbg/
+│   └── merge_xml.py        # XML merge utilities
+├── main.py                 # CLI entry (modular pipeline)
+├── server_pa.py            # FastAPI backend server
+└── requirements.txt       # Python dependencies
 ```
 
 ## Installation & Setup
@@ -122,7 +122,7 @@ Follow these steps to set up the project locally.
 ### 2. Clone Repository
 ```bash
 git clone https://github.com/BIT-DataLab/Edit-Banana.git
-cd Image2DrawIO
+cd Edit-Banana
 ```
 
 ### 3. Initialize Directory Structure
@@ -135,45 +135,158 @@ mkdir -p output
 mkdir -p sam3_output
 ```
 
-### 4. Download Model Weights
-Download the required models and place them in the correct paths:
+### 3.1 Models & Assets to Download (Do Not Commit to the Repo)
 
-| Model | Download | Target Path |
-| :--- | :--- | :--- |
-| **SAM 3** | https://modelscope.cn/models/facebook/sam3 | `models/sam3.pt` (or as configured) |
+The following **large files are not included in this repository**. Download them yourself and place them in the paths below. The repo uses `.gitignore` to exclude `models/`, `sam3_src/`, etc. **Do not commit these files to Git.**
 
-> **Note**: For SAM 3 (or the specific segmentation checkpoint used), place the `.pt` file in `models/` and update `config.yaml`.
+| Asset | Description | Target path | How to get |
+|-------|-------------|-------------|------------|
+| **SAM3 weights** | Segmentation checkpoint (must be `.pt` format) | `models/sam3_ms/sam3.pt` or as in config | [ModelScope](https://modelscope.cn/models/facebook/sam3) (recommended) or [Hugging Face](https://huggingface.co/facebook/sam3) |
+| **BPE vocab** | SAM3 text encoder vocabulary | `models/bpe_simple_vocab_16e6.txt.gz` | Copied when you run `scripts/setup_sam3.sh` from cloned `sam3_src`; or from [facebookresearch/sam3](https://github.com/facebookresearch/sam3) repo assets |
+| **RMBG model** (optional) | Background removal for icons/arrows | `models/rmbg/model.onnx` | `pip install modelscope && python scripts/setup_rmbg.py` or download from [ModelScope RMBG-2.0](https://www.modelscope.cn/models/AI-ModelScope/RMBG-2.0/files) |
 
-### 5. Install Dependencies
+See sections **5. Install SAM3 library**, **6. Download model weights**, and **Optional — RMBG** below for step-by-step instructions.
 
-**Backend:**
+### 4. Install PyTorch (required for SAM3)
+Install PyTorch with CUDA support (recommended) or CPU-only. Example for CUDA 11.8:
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+```
+For other CUDA versions or CPU, see [pytorch.org](https://pytorch.org/get-started/locally/).
+
+### 5. Install SAM3 library and get BPE
+This project uses the SAM3 Python API; the code is not in this repo. **Detailed steps:** [docs/SETUP_SAM3.md](docs/SETUP_SAM3.md).
+
+**Quick path (from repo root, with venv activated):**
+```bash
+bash scripts/setup_sam3.sh
+```
+This clones [facebookresearch/sam3](https://github.com/facebookresearch/sam3) into `sam3_src`, runs `pip install -e sam3_src`, and copies the BPE vocab to `models/bpe_simple_vocab_16e6.txt.gz`.
+
+Verify: `python -c "from sam3.model_builder import build_sam3_image_model; print('OK')"`
+
+### 6. Download model weights
+Get the SAM 3 checkpoint and place it under `models/`:
+- **ModelScope (recommended, no access request):** [modelscope.cn/models/facebook/sam3](https://modelscope.cn/models/facebook/sam3)
+- **Hugging Face:** [facebook/sam3](https://huggingface.co/facebook/sam3) — request access first.
+
+See [docs/SETUP_SAM3.md](docs/SETUP_SAM3.md) for download commands and `config.yaml` setup.
+
+### 7. Install Python dependencies
+
+**Backend (required):**
 ```bash
 pip install -r requirements.txt
 ```
 
-**Tesseract (for text OCR):** Install the Tesseract engine on your system (required for local text recognition). Example on Ubuntu:
+**Tesseract (default text OCR; install one of Tesseract or PaddleOCR):** Install the Tesseract engine on your system. Example on Ubuntu:
 ```bash
 sudo apt install tesseract-ocr tesseract-ocr-chi-sim
 ```
+If you use PaddleOCR (`ocr.engine: "paddleocr"`), Tesseract is optional but recommended as fallback.
 
-### 6. Configuration
+**Optional — PaddleOCR (better for mixed Chinese/English text):** Use **PaddlePaddle 3.2.x + PaddleOCR 3.x** (recommend 3.2.2; 3.3.0+ has a CPU oneDNN bug and will auto-fallback to Tesseract):
+```bash
+pip uninstall paddleocr paddlepaddle paddlepaddle-gpu paddlex -y
+pip install paddlepaddle==3.2.2 paddleocr   # CPU; avoids 3.3.0 oneDNN bug
+# GPU: pip install paddlepaddle-gpu==3.2.2 paddleocr
+```
+Then in `config/config.yaml` set `ocr.engine: "paddleocr"`.
 
-1.  **Config File**: Copy the example config.
+**Optional — formula recognition (Pix2Text):** For LaTeX formula recognition, install:
+```bash
+pip install pix2text
+# GPU: pip install onnxruntime-gpu
+```
+
+**Optional — RMBG (background removal for icons/arrows):** For IconPictureProcessor:
+1. Install runtime: `pip install onnxruntime` (or `onnxruntime-gpu`).
+2. Download RMBG-2.0 model (e.g. from ModelScope) to `models/rmbg/model.onnx`:
+   ```bash
+   pip install modelscope
+   python scripts/setup_rmbg.py
+   ```
+   Or manually: [ModelScope RMBG-2.0](https://www.modelscope.cn/models/AI-ModelScope/RMBG-2.0/files) — download `model.onnx` into `models/rmbg/`.
+
+### 8. Configuration
+
+1. **Config file (required before first run):**
     ```bash
     cp config/config.yaml.example config/config.yaml
     ```
-2.  **Environment Variables** (optional): Create a `.env` file in the root directory if your setup requires API keys or endpoints.
+    Edit `config/config.yaml`: set `sam3.checkpoint_path` and `sam3.bpe_path` to your `models/` paths. Optionally set `ocr.engine: "paddleocr"` to use PaddleOCR for text.
+2.  **Environment variables (optional):** Create a `.env` file in the root if you use API keys or custom endpoints.
+
+### 9. Notes & Troubleshooting
+
+**Recommended versions**
+
+| Component | Version | Notes |
+|-----------|---------|-------|
+| Python | 3.10+ | Must be compatible with PyTorch and Paddle |
+| PyTorch | 2.x + CUDA to match GPU | Newer GPUs (e.g. Blackwell sm_120) may need cu128; or set `sam3.device: "cpu"` |
+| SAM3 weights | `sam3.pt` (not safetensors) | Set `config.sam3.checkpoint_path` to e.g. `models/sam3_ms/sam3.pt` |
+| PaddleOCR | PaddlePaddle **3.2.2** + PaddleOCR 3.x | 3.3.0+ has CPU oneDNN bug; pipeline will auto-fallback to Tesseract |
+| Tesseract | System install | Ubuntu: `sudo apt install tesseract-ocr tesseract-ocr-chi-sim` |
+| RMBG | onnxruntime + `models/rmbg/model.onnx` | Optional; use `scripts/setup_rmbg.py` or ModelScope to download |
+
+**Before first run**
+
+- [ ] Copy `config/config.yaml.example` to `config/config.yaml` and set `sam3.checkpoint_path`, `sam3.bpe_path`
+- [ ] Place SAM3 weights (e.g. `models/sam3_ms/sam3.pt`) and BPE (`models/bpe_simple_vocab_16e6.txt.gz`) under `models/`
+- [ ] Run `scripts/setup_sam3.sh` or follow [docs/SETUP_SAM3.md](docs/SETUP_SAM3.md) to install the SAM3 library
+- [ ] Install Tesseract system-wide, or install PaddleOCR and set `ocr.engine: "paddleocr"`
+
+**Common issues**
+
+- **"no kernel image is available for execution on the device"** — GPU arch does not match PyTorch CUDA. Set `sam3.device: "cpu"` in `config.yaml` or upgrade PyTorch to a matching CUDA build (e.g. cu128).
+- **"Model file not found at .../models/rmbg/model.onnx"** — RMBG is optional; safe to ignore if you do not need background removal. To enable: `pip install modelscope && python scripts/setup_rmbg.py` or download from [ModelScope RMBG-2.0](https://www.modelscope.cn/models/AI-ModelScope/RMBG-2.0/files) into `models/rmbg/model.onnx`.
+- **"PaddleOCR inference failed…fallback to Tesseract"** — Paddle/oneDNN incompatibility. Use `paddlepaddle==3.2.2` + `paddleocr`, or set `ocr.engine: "tesseract"`.
+- **"Please install PaddleOCR" / "pytesseract not installed"** — Install the corresponding OCR stack; for Tesseract only, install system `tesseract-ocr` and `pip install pytesseract`.
+- **"Checking connectivity to the model hosters" hangs** — `main.py` sets `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` by default; if it still appears, run `export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` before starting.
 
 ## Usage
 
 ### Command Line Interface (CLI)
 
-To process a single image:
+Supports image files (PNG, JPG, BMP, TIFF, WebP). To process a single image:
 
 ```bash
 python main.py -i input/test_diagram.png
 ```
-The output XML will be saved in the `output/` directory.
+The output XML will be saved in the `output/` directory. For batch processing, put images in `input/` and run `python main.py` without `-i`.
+
+### Run and test locally
+
+1. **One-time setup**
+   ```bash
+   git clone https://github.com/BIT-DataLab/Edit-Banana.git && cd Edit-Banana
+   python3 -m venv .venv && source .venv/bin/activate   # Linux/macOS; Windows: .venv\Scripts\activate
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118   # or CPU build
+   pip install -r requirements.txt
+   sudo apt install tesseract-ocr tesseract-ocr-chi-sim   # OCR (or equivalent on your OS)
+   ```
+   Install the SAM3 library (see [Install SAM3 library](#5-install-sam3-library)) and download [model weights + BPE](#6-download-model-weights-and-bpe-vocab). Then:
+   ```bash
+   mkdir -p input output
+   cp config/config.yaml.example config/config.yaml
+   # Edit config/config.yaml: set sam3.checkpoint_path and sam3.bpe_path to your models/ paths
+   ```
+
+2. **Test with CLI**
+   ```bash
+   # Put a diagram image in input/, e.g. input/test.png
+   python main.py -i input/test.png
+   # Output appears under output/<image_stem>/ (DrawIO XML and intermediates)
+   ```
+
+3. **Optional: test the web API**
+   ```bash
+   python server_pa.py
+   # In another terminal:
+   curl -X POST http://localhost:8000/convert -F "file=@input/test.png"
+   # Or open http://localhost:8000/docs and use the /convert endpoint with a file upload
+   ```
 
 ## Configuration `config.yaml`
 
@@ -199,8 +312,8 @@ Contributions of all kinds are welcome (code submissions, bug reports, feature s
 4.  Push to the branch (`git push origin feature/xxx`)
 5.  Open a Pull Request
 
-Bug Reports: [Issues](https://github.com/XiangjianYi/Image2DrawIO/issues)
-Feature Suggestions: [Discussions](https://github.com/XiangjianYi/Image2DrawIO/discussions)
+Bug Reports: [Issues](https://github.com/BIT-DataLab/Edit-Banana/issues)
+Feature Suggestions: [Discussions](https://github.com/BIT-DataLab/Edit-Banana/discussions)
 
 
 
@@ -234,4 +347,4 @@ This project is open-source under the [Apache License 2.0](LICENSE), allowing co
 
 🌟 If this project helps you, please star it to show your support!
 
-![Star History Chart](https://api.star-history.com/svg?repos=bit-datalab/edit-banana&type=date&legend=top-left)(https://www.star-history.com/#bit-datalab/edit-banana&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=bit-datalab/edit-banana&type=date&legend=top-left)](https://www.star-history.com/#bit-datalab/edit-banana&type=date&legend=top-left)

@@ -27,6 +27,8 @@ def main():
     parser.add_argument("-o", "--output", default="./output", help="Output directory")
     parser.add_argument("--formula", choices=["pix2text", "none"], default="none",
                         help="Formula engine (default: none)")
+    parser.add_argument("--ocr-engine", choices=["tesseract", "paddleocr"], default="tesseract",
+                        help="OCR engine (default: tesseract; paddleocr needs pip install paddleocr paddlepaddle)")
     args = parser.parse_args()
 
     if not os.path.exists(args.input):
@@ -34,7 +36,7 @@ def main():
         sys.exit(1)
 
     os.makedirs(args.output, exist_ok=True)
-    restorer = TextRestorer(formula_engine=args.formula)
+    restorer = TextRestorer(formula_engine=args.formula, ocr_engine=args.ocr_engine)
     xml_content = restorer.process(args.input)
 
     out_path = os.path.join(args.output, "text_only.drawio")

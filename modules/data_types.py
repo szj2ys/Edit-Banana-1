@@ -127,7 +127,6 @@ class ElementInfo:
     # === 元数据 ===
     source_prompt: Optional[str] = None          # 触发此元素识别的prompt
     processing_notes: List[str] = field(default_factory=list)  # 处理过程中的备注
-    metadata: Optional[Dict[str, Any]] = None    # 扩展元数据（供各模块使用）
     
     def has_xml(self) -> bool:
         """检查是否已生成XML"""
@@ -144,7 +143,6 @@ class ElementInfo:
             'layer_level': self.layer_level,
             'has_xml': self.has_xml(),
             'source_prompt': self.source_prompt,
-            'metadata': self.metadata,
         }
     
     @classmethod
@@ -159,7 +157,6 @@ class ElementInfo:
             polygon=data.get('polygon', []),
             layer_level=data.get('layer_level', LayerLevel.OTHER.value),
             source_prompt=data.get('source_prompt'),
-            metadata=data.get('metadata'),
         )
 
 
