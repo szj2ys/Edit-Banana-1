@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { Loader2, Download, CheckCircle, AlertCircle } from "lucide-react"
+import { track } from "@vercel/analytics"
 import { Button } from "@/components/ui/button"
 import { FileUpload } from "@/components/upload/file-upload"
 import { uploadFile, getJobStatus, downloadResult, APIError } from "@/lib/api"
@@ -22,6 +23,7 @@ export function UploadSection() {
     setJobId(null)
     setJobStatus(null)
     setResultUrl(null)
+    track("file_selected", { filename: file.name, size: file.size })
   }
 
   const handleConvert = async () => {
@@ -32,6 +34,7 @@ export function UploadSection() {
 
     try {
       // Upload file
+      track("conversion_started", { filename: selectedFile.name })
       const response = await uploadFile(selectedFile, true, false)
       setJobId(response.job_id)
       setJobStatus("pending")
@@ -64,6 +67,7 @@ export function UploadSection() {
           setLoading(false)
           setProgress(100)
           setResultUrl(`${process.env.NEXT_PUBLIC_API_URL || "https://editbanana.anxin6.cn"}/api/v1/jobs/${id}/result`)
+          track("conversion_completed", { job_id: id })
         } else if (job.status === "failed" || job.status === "cancelled") {
           clearInterval(interval)
           setLoading(false)
@@ -81,6 +85,7 @@ export function UploadSection() {
     if (!jobId) return
 
     try {
+      track("download_clicked", { job_id: jobId, filename: selectedFile?.name })
       const blob = await downloadResult(jobId)
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement("a")
