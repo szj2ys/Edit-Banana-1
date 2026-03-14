@@ -30,13 +30,14 @@ from modules import (
     IconPictureProcessor,
     BasicShapeProcessor,
     ArrowProcessor,
+    ArrowConnector,
     XMLMerger,
     MetricEvaluator,
     RefinementProcessor,
-    
+
     # 文字处理（已整合到 modules/text/）
     TextRestorer,
-    
+
     # 上下文和数据类型
     ProcessingContext,
     ProcessingResult,
@@ -87,6 +88,7 @@ class Pipeline:
         self._icon_processor = None
         self._shape_processor = None
         self._arrow_processor = None
+        self._arrow_connector = None
         self._xml_merger = None
         self._metric_evaluator = None
         self._refinement_processor = None
@@ -126,7 +128,13 @@ class Pipeline:
         if self._arrow_processor is None:
             self._arrow_processor = ArrowProcessor()
         return self._arrow_processor
-    
+
+    @property
+    def arrow_connector(self) -> ArrowConnector:
+        if self._arrow_connector is None:
+            self._arrow_connector = ArrowConnector()
+        return self._arrow_connector
+
     @property
     def xml_merger(self) -> XMLMerger:
         if self._xml_merger is None:
@@ -295,7 +303,11 @@ class Pipeline:
             result = self.arrow_processor.process(context)
             print(f"   Arrows: {result.metadata.get('arrows_processed', 0)}")
 
-            print("\n[5] XML fragments...")
+            print("\n[5] Arrow connection...")
+            result = self.arrow_connector.process(context)
+            print(f"   Connected: {result.metadata.get('arrows_connected', 0)}/{result.metadata.get('total_arrows', 0)}")
+
+            print("\n[6] XML fragments...")
             self._generate_xml_fragments(context)
             xml_count = len([e for e in context.elements if e.has_xml()])
             print(f"   Fragments: {xml_count}")
@@ -369,8 +381,36 @@ class Pipeline:
                 
             elif elem_type in {'arrow', 'line', 'connector'}:
                 # 箭头类
-                style = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;"
                 elem.layer_level = LayerLevel.ARROW.value
+
+                # 检查是否有连接元数据
+                conn_meta = elem.metadata.get('arrow_connection') if elem.metadata else None
+                has_connection = conn_meta and (conn_meta.get('source_id') is not None or conn_meta.get('target_id') is not None)
+
+                if has_connection:
+                    # 有连接的箭头：使用 edge XML，带 source/target 属性
+                    source_id = conn_meta.get('source_id')
+                    target_id = conn_meta.get('target_id')
+                    style = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;"
+
+                    # 构建 source/target 属性
+                    source_attr = f' source="{source_id}"' if source_id is not None else ''
+                    target_attr = f' target="{target_id}"' if target_id is not None else ''
+
+                    # 使用 arrow_start 和 arrow_end 作为端点坐标
+                    start = elem.arrow_start or (elem.bbox.x1, elem.bbox.y1)
+                    end = elem.arrow_end or (elem.bbox.x2, elem.bbox.y2)
+
+                    elem.xml_fragment = f'''<mxCell id="{elem.id}" parent="1" edge="1"{source_attr}{target_attr} style="{style}">
+  <mxGeometry relative="1" as="geometry">
+    <mxPoint x="{start[0]}" y="{start[1]}" as="sourcePoint"/>
+    <mxPoint x="{end[0]}" y="{end[1]}" as="targetPoint"/>
+  </mxGeometry>
+</mxCell>'''
+                    continue  # 已生成 XML，跳过后续通用生成
+                else:
+                    # 无连接的箭头：使用 vertex 方式（图片或基本图形）
+                    style = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;"
                 
             elif elem_type in {'section_panel', 'title_bar'}:
                 # 背景/容器类

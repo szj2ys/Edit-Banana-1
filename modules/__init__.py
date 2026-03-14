@@ -19,6 +19,7 @@ from .xml_merger import XMLMerger
 from .icon_picture_processor import IconPictureProcessor
 from .basic_shape_processor import BasicShapeProcessor
 from .arrow_processor import ArrowProcessor
+from .arrow_connector import ArrowConnector
 from .metric_evaluator import MetricEvaluator
 from .refinement_processor import RefinementProcessor
 
@@ -54,6 +55,7 @@ __all__ = [
     'IconPictureProcessor',
     'BasicShapeProcessor',
     'ArrowProcessor',
+    'ArrowConnector',
     'MetricEvaluator',
     'RefinementProcessor',
 ]
