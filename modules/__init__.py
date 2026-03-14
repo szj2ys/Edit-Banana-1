@@ -15,15 +15,13 @@ from .data_types import (
 from .sam3_info_extractor import Sam3InfoExtractor
 from .xml_merger import XMLMerger
 
-# 图形处理模块
+# Shape/icon processors
 from .icon_picture_processor import IconPictureProcessor
 from .basic_shape_processor import BasicShapeProcessor
-from .arrow_processor import ArrowProcessor
-from .arrow_connector import ArrowConnector
 from .metric_evaluator import MetricEvaluator
 from .refinement_processor import RefinementProcessor
 
-# 文字处理模块（已整合到 modules/text/）；依赖 ocr/coord_processor 等，缺失时可选跳过
+# Text (modules/text/); optional if ocr/coord_processor missing
 try:
     from .text.restorer import TextRestorer
 except Exception as e:
@@ -32,11 +30,11 @@ except Exception as e:
     TextRestorer = None
 
 __all__ = [
-    # 基础类
+    # Base
     'BaseProcessor',
     'ProcessingContext',
     
-    # 数据类型
+    # Data types
     'ElementInfo',
     'BoundingBox',
     'ProcessingResult',
@@ -44,18 +42,15 @@ __all__ = [
     'LayerLevel',
     'get_layer_level',
     
-    # 文字处理模块（第一步）
+    # Text (first step)
     'TextRestorer',
     
-    # 核心模块
+    # Core
     'Sam3InfoExtractor',
     'XMLMerger',
-    
-    # 图形处理模块
+    # Shape/icon
     'IconPictureProcessor',
     'BasicShapeProcessor',
-    'ArrowProcessor',
-    'ArrowConnector',
     'MetricEvaluator',
     'RefinementProcessor',
 ]

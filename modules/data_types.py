@@ -127,7 +127,6 @@ class ElementInfo:
     # === 元数据 ===
     source_prompt: Optional[str] = None          # 触发此元素识别的prompt
     processing_notes: List[str] = field(default_factory=list)  # 处理过程中的备注
-    metadata: Optional[Dict[str, Any]] = None    # 通用元数据存储（用于arrow_connection等）
     
     def has_xml(self) -> bool:
         """检查是否已生成XML"""

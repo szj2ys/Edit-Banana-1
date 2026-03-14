@@ -1,14 +1,12 @@
 """
-文字还原器 - 主接口模块
+Text restorer — main interface for diagram text to draw.io XML.
 
-功能：
-    将流程图图片中的文字和公式识别并转换为 draw.io XML 格式。
+Converts text and formulas in diagram images to draw.io XML.
 
-Pipeline 接口：
+Usage:
     from modules.text import TextRestorer
-    
     restorer = TextRestorer()
-    xml_string = restorer.process("input.png")  # 返回 XML 字符串
+    xml_string = restorer.process("input.png")
 """
 
 import time
@@ -17,12 +15,10 @@ from typing import List, Dict, Any, Optional
 
 from PIL import Image
 
-# OCR 模块（相对导入）
 from .ocr.local_ocr import LocalOCR
 from .coord_processor import CoordProcessor
 from .xml_generator import MxGraphXMLGenerator
 
-# 四个处理器（相对导入）
 from .processors.font_size import FontSizeProcessor
 from .processors.font_family import FontFamilyProcessor
 from .processors.style import StyleProcessor
@@ -31,16 +27,22 @@ from .processors.formula import FormulaProcessor
 
 class TextRestorer:
     """
-    文字还原器：协调 OCR、各处理器和输出模块，完成文字还原。
-    默认使用本地 Tesseract OCR + 可选 Pix2Text 公式识别。
+    Coordinates OCR, processors, and XML output for text restoration.
+    Default: Tesseract OCR + optional Pix2Text for formulas.
     """
 
-    def __init__(self, formula_engine: str = "pix2text"):
+    def __init__(
+        self,
+        formula_engine: str = "pix2text",
+        ocr_engine: str = "tesseract",
+    ):
         """
         Args:
-            formula_engine: 公式识别引擎 ('pix2text', 'none')
+            formula_engine: Formula engine ('pix2text', 'none').
+            ocr_engine: Layout/text OCR engine ('tesseract', 'paddleocr'). PaddleOCR often better for mixed CN/EN.
         """
         self.formula_engine = formula_engine
+        self._ocr_engine = (ocr_engine or "tesseract").strip().lower()
 
         self._layout_ocr = None
         self._pix2text_ocr = None
@@ -58,40 +60,51 @@ class TextRestorer:
         }
 
     @property
-    def layout_ocr(self) -> LocalOCR:
-        """延迟初始化本地 OCR"""
+    def layout_ocr(self):
+        """Lazy-init layout OCR (tesseract or paddleocr); fallback to Tesseract if PaddleOCR fails."""
         if self._layout_ocr is None:
-            self._layout_ocr = LocalOCR()
+            if self._ocr_engine == "paddleocr":
+                try:
+                    from .ocr.paddle_ocr import PaddleOCRAdapter
+                    self._layout_ocr = PaddleOCRAdapter()
+                except Exception as e:
+                    import warnings
+                    warnings.warn(
+                        f"PaddleOCR unavailable ({e}), falling back to Tesseract. See README for compatible install.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    self._layout_ocr = LocalOCR()
+            else:
+                self._layout_ocr = LocalOCR()
         return self._layout_ocr
 
     @property
     def pix2text_ocr(self):
-        """延迟初始化 Pix2Text OCR"""
+        """Lazy-init Pix2Text OCR (None if pix2text not installed)."""
+        from .ocr import Pix2TextOCR
+        if Pix2TextOCR is None:
+            return None
         if self._pix2text_ocr is None:
-            from .ocr.pix2text import Pix2TextOCR
             self._pix2text_ocr = Pix2TextOCR()
         return self._pix2text_ocr
     
     def process(self, image_path: str) -> str:
         """
-        处理图像，返回 XML 字符串（Pipeline 主接口）
-        
+        Process image and return draw.io XML string.
+
         Args:
-            image_path: 输入图像路径
-            
+            image_path: Input image path.
         Returns:
-            draw.io 格式的 XML 字符串
+            draw.io XML string.
         """
         image_path = Path(image_path)
-        
-        # 获取图像尺寸
+
         with Image.open(image_path) as img:
             image_width, image_height = img.size
         
-        # 处理图像
         text_blocks = self.process_image(str(image_path))
-        
-        # 生成 XML
+
         generator = MxGraphXMLGenerator(
             diagram_name=image_path.stem,
             page_width=image_width,
@@ -120,39 +133,30 @@ class TextRestorer:
         return generator.generate_xml(text_cells)
     
     def process_image(self, image_path: str) -> List[Dict[str, Any]]:
-        """
-        处理图像，返回文字块列表
-        
-        Args:
-            image_path: 输入图像路径
-            
-        Returns:
-            处理后的文字块列表
-        """
+        """Process image and return list of text blocks."""
         total_start = time.time()
         image_path = Path(image_path)
-        
-        # 获取图像尺寸
+
         with Image.open(image_path) as img:
             image_width, image_height = img.size
         
-        # Step 1: OCR 识别
+        # Step 1: OCR
         ocr_result, formula_result = self._run_ocr(str(image_path))
 
-        # Step 2: 公式处理（合并 layout OCR 与 Pix2Text）
+        # Step 2: Formula (layout OCR + Pix2Text)
         processing_start = time.time()
 
         if formula_result:
-            print("\n🔗 公式处理...")
+            print("\nFormula refinement...")
             merged_blocks = self.formula_processor.merge_ocr_results(ocr_result, formula_result)
             text_blocks = self.formula_processor.to_dict_list(merged_blocks)
         else:
             text_blocks = self._ocr_result_to_dict_list(ocr_result)
         
-        print(f"   {len(text_blocks)} 个文字块")
-        
-        # Step 3: 坐标转换
-        print("\n📐 坐标转换...")
+        print(f"   {len(text_blocks)} text blocks")
+
+        # Step 3: Coord transform
+        print("\nCoord transform...")
         coord_processor = CoordProcessor(
             source_width=image_width,
             source_height=image_height
@@ -166,17 +170,17 @@ class TextRestorer:
             else:
                 block["geometry"] = {"x": 0, "y": 0, "width": 100, "height": 20, "rotation": 0}
         
-        # Step 4: 字号处理
-        print("\n🔧 字号处理...")
+        # Step 4: Font size
+        print("\nFont size...")
         text_blocks = self.font_size_processor.process(text_blocks)
         
-        # Step 5: 字体处理
-        print("\n🎨 字体处理...")
+        # Step 5: Font family
+        print("\nFont family...")
         global_font = self._detect_global_font(ocr_result)
         text_blocks = self.font_family_processor.process(text_blocks, global_font=global_font)
 
-        # Step 6: 样式处理（加粗/颜色）
-        print("\n🎨 样式处理...")
+        # Step 6: Style (bold/color)
+        print("\nStyle...")
         ocr_styles = getattr(ocr_result, "styles", [])
         text_blocks = self.style_processor.process(text_blocks, ocr_styles=ocr_styles)
         
@@ -192,39 +196,24 @@ class TextRestorer:
         save_metadata: bool = True,
         save_debug_image: bool = True
     ) -> str:
-        """
-        完整还原流程：处理图像并生成 draw.io 文件
-        
-        Args:
-            image_path: 输入图像路径
-            output_path: 输出文件路径
-            save_metadata: 是否保存元数据
-            save_debug_image: 是否生成调试图
-            
-        Returns:
-            输出文件路径
-        """
+        """Full pipeline: process image and write draw.io file."""
         image_path = Path(image_path)
-        
-        # 设置输出路径
+
         if output_path is None:
             output_path = image_path.with_suffix(".drawio")
         else:
             output_path = Path(output_path)
         
-        # 获取图像尺寸
         with Image.open(image_path) as img:
             image_width, image_height = img.size
-        
-        print(f"📄 输入: {image_path}")
-        print(f"📝 输出: {output_path}")
-        print(f"📐 尺寸: {image_width} x {image_height}")
-        
-        # 处理图像
+
+        print(f"Input: {image_path}")
+        print(f"Output: {output_path}")
+        print(f"Size: {image_width} x {image_height}")
+
         text_blocks = self.process_image(str(image_path))
-        
-        # 生成 XML
-        print("\n📄 生成 XML...")
+
+        print("\nGenerating XML...")
         xml_start = time.time()
         
         generator = MxGraphXMLGenerator(
@@ -257,32 +246,46 @@ class TextRestorer:
         xml_time = time.time() - xml_start
         self.timing["total"] += xml_time
         
-        # 保存元数据
+        # Save metadata
         if save_metadata:
             self._save_metadata(str(image_path), str(output_path), text_blocks, image_width, image_height)
         
-        # 生成调试图
+        # Debug image
         if save_debug_image:
             debug_path = output_path.parent / "debug.png"
             self._generate_debug_image(str(image_path), str(debug_path))
         
-        # 打印统计
+        # Stats
         self._print_stats(text_blocks)
         
         return str(output_path)
     
     def _run_ocr(self, image_path: str):
-        """运行 OCR（本地 Tesseract + 可选 Pix2Text 公式优化）"""
-        print("\n📖 Text OCR (Tesseract)...")
+        """Run OCR (Tesseract or PaddleOCR + optional Pix2Text for formulas)."""
+        engine_label = "PaddleOCR" if self._ocr_engine == "paddleocr" else "Tesseract"
+        print(f"\n📖 Text OCR ({engine_label})...")
         text_start = time.time()
-        ocr_result = self.layout_ocr.analyze_image(image_path)
+        try:
+            ocr_result = self.layout_ocr.analyze_image(image_path)
+        except Exception as e:
+            if self._ocr_engine == "paddleocr":
+                import warnings
+                warnings.warn(
+                    f"PaddleOCR inference failed ({e!r}), falling back to Tesseract.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                self._layout_ocr = LocalOCR()
+                ocr_result = self._layout_ocr.analyze_image(image_path)
+            else:
+                raise
         self.timing["text_ocr"] = time.time() - text_start
-        print(f"   {len(ocr_result.text_blocks)} 个文字块 ({self.timing['text_ocr']:.2f}s)")
+        print(f"   {len(ocr_result.text_blocks)} text blocks ({self.timing['text_ocr']:.2f}s)")
 
         formula_result = None
 
-        if self.formula_engine == "pix2text":
-            print("\n🔬 公式优化 (Refinement Mode)...")
+        if self.formula_engine == "pix2text" and self.pix2text_ocr is not None:
+            print("\nFormula refinement...")
             refine_start = time.time()
             fixed_count = 0
 
@@ -297,16 +300,16 @@ class TextRestorer:
                     i += 1
                     continue
                 
-                # 当前块
+                # Current block
                 curr_block = blocks[i]
                 curr_poly = curr_block.polygon
                 
-                # 检查是否值得 Refine (初步过滤)
+                # Worth refining?
                 if not self._should_refine_block(curr_block.text):
                     i += 1
                     continue
                 
-                # 尝试向后寻找可以合并的块
+                # Look ahead for merge
                 group_indices = [i]
                 group_polygon = curr_poly
                 
@@ -314,7 +317,7 @@ class TextRestorer:
                 while j < len(blocks):
                     next_block = blocks[j]
                     
-                    # 距离检查
+                    # Distance check
                     if self._is_spatially_close(group_polygon, next_block.polygon):
                         if self._should_refine_block(next_block.text): 
                             group_indices.append(j)
@@ -325,10 +328,10 @@ class TextRestorer:
                     else:
                         break
                 
-                # 确定最终的识别区域
+                # Final region
                 target_polygon = group_polygon
                 
-                # 调用 Pix2Text
+                # Call Pix2Text
                 latex_text = self.pix2text_ocr.recognize_region(image_path, target_polygon)
                 
                 if latex_text and self.formula_processor.is_valid_formula(latex_text):
@@ -372,17 +375,19 @@ class TextRestorer:
                 ocr_result.text_blocks = final_blocks
 
             self.timing["pix2text_ocr"] = time.time() - refine_start
-            print(f"   优化了 {fixed_count} 个公式块 ({self.timing['pix2text_ocr']:.2f}s)")
+            print(f"   Refined {fixed_count} formula blocks ({self.timing['pix2text_ocr']:.2f}s)")
 
             formula_result = None
 
+        elif self.formula_engine == "pix2text" and self.pix2text_ocr is None:
+            print("\nSkipping formula (pix2text not installed)")
         else:
-            print("\n⏭️  跳过公式识别")
+            print("\nSkipping formula")
 
         return ocr_result, formula_result
 
     def _should_refine_block(self, text: str) -> bool:
-        """判断是否需要尝试 Refine"""
+        """Whether to try refinement."""
         if not text: return False
         
         if '?' in text or '？' in text or '(?)' in text:
@@ -400,7 +405,7 @@ class TextRestorer:
         return True
 
     def _is_refinement_meaningful(self, original: str, new_latex: str) -> bool:
-        """判断 Refine 结果是否有实质性改变"""
+        """Whether refinement changed result meaningfully."""
         import re
         
         core_latex = re.sub(r'\\(mathbf|mathrm|textit|text|boldsymbol|mathcal|mathscr)\{([^\}]+)\}', r'\2', new_latex)
@@ -415,7 +420,7 @@ class TextRestorer:
         return True
 
     def _is_spatially_close(self, poly1, poly2) -> bool:
-        """判断两个多边形是否在空间上接近"""
+        """Whether two polygons are spatially close."""
         def get_bbox(p):
             xs, ys = [pt[0] for pt in p], [pt[1] for pt in p]
             return min(xs), min(ys), max(xs), max(ys)
@@ -447,14 +452,14 @@ class TextRestorer:
         return False
 
     def _merge_polygons(self, poly1, poly2):
-        """合并两个多边形"""
+        """Merge two polygons."""
         xs = [p[0] for p in poly1] + [p[0] for p in poly2]
         ys = [p[1] for p in poly1] + [p[1] for p in poly2]
         min_x, min_y, max_x, max_y = min(xs), min(ys), max(xs), max(ys)
         return [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]
     
     def _ocr_result_to_dict_list(self, ocr_result) -> List[Dict[str, Any]]:
-        """将 OCR 结果转换为字典列表"""
+        """Convert OCR result to list of dicts."""
         return [
             {
                 "text": block.text,
@@ -474,7 +479,7 @@ class TextRestorer:
         ]
 
     def _detect_global_font(self, ocr_result) -> str:
-        """检测全局主字体"""
+        """Detect global dominant font."""
         if not ocr_result.text_blocks:
             return "Arial"
 
@@ -490,14 +495,14 @@ class TextRestorer:
         font = getattr(best_block, "font_name", None)
         
         if font:
-            print(f"   ✨ 识别到主字体: {font}")
+            print(f"   Dominant font: {font}")
             return font
         
         return "Arial"
     
     def _save_metadata(self, image_path: str, output_path: str, text_blocks: List[Dict], 
                        image_width: int, image_height: int):
-        """保存元数据"""
+        """Save metadata."""
         import json
         from datetime import datetime
         
@@ -541,34 +546,34 @@ class TextRestorer:
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
         
-        print(f"   元数据已保存: {metadata_path}")
+        print(f"   Metadata saved: {metadata_path}")
     
     def _generate_debug_image(self, image_path: str, output_path: str):
-        """生成调试图"""
+        """Generate debug image."""
         try:
-            # 简单实现：复制原图作为调试图
+            # Simple: copy image as debug
             from PIL import Image
             img = Image.open(image_path)
             img.save(output_path)
         except Exception as e:
-            print(f"   ⚠️ 调试图生成失败: {e}")
+            print(f"   Debug image failed: {e}")
     
     def _print_stats(self, text_blocks: List[Dict]):
-        """打印统计信息"""
-        print(f"\n⏱️  耗时:")
+        """Print stats."""
+        print(f"\nTime:")
         print(f"   Text OCR:  {self.timing['text_ocr']:.2f}s")
         print(f"   Pix2Text:  {self.timing['pix2text_ocr']:.2f}s")
-        print(f"   处理:      {self.timing['processing']:.2f}s")
-        print(f"   总计:      {self.timing['total']:.2f}s")
+        print(f"   Processing: {self.timing['processing']:.2f}s")
+        print(f"   Total:      {self.timing['total']:.2f}s")
         
-        print(f"\n✅ 完成！共 {len(text_blocks)} 个文本单元格")
+        print(f"\nDone: {len(text_blocks)} text cells")
 
 
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
-        print("用法: python restorer.py <image_path> [output_path]")
+        print("Usage: python restorer.py <image_path> [output_path]")
         sys.exit(1)
     
     image_path = sys.argv[1]
