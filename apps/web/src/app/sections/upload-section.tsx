@@ -1,12 +1,13 @@
 "use client"
 
 import { useState } from "react"
-import { Loader2, Download, CheckCircle, AlertCircle, Share2 } from "lucide-react"
+import { Loader2, Download, CheckCircle, AlertCircle, Share2, Eye } from "lucide-react"
 import { track } from "@vercel/analytics"
 import { Button } from "@/components/ui/button"
 import { FileUpload } from "@/components/upload/file-upload"
 import { ShareModal } from "@/components/share/share-modal"
-import { uploadFile, getJobStatus, downloadResult, APIError } from "@/lib/api"
+import { PreviewModal } from "@/components/preview/preview-modal"
+import { uploadFile, getJobStatus, downloadResult, createPreview, getPreviewUrl, APIError } from "@/lib/api"
 import { useConversionHistoryContext } from "@/components/history/conversion-history-provider"
 import type { Job } from "@/lib/types"
 
@@ -19,6 +20,10 @@ export function UploadSection() {
   const [error, setError] = useState<string | null>(null)
   const [resultUrl, setResultUrl] = useState<string | null>(null)
   const [showShareModal, setShowShareModal] = useState(false)
+  const [showPreviewModal, setShowPreviewModal] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewExpiresAt, setPreviewExpiresAt] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
   const { addHistoryItem, updateHistoryItem } = useConversionHistoryContext()
 
   const handleFileSelect = (file: File) => {
@@ -135,6 +140,35 @@ export function UploadSection() {
     }
   }
 
+  const handlePreview = async () => {
+    if (!jobId) return
+
+    setPreviewLoading(true)
+    setError(null)
+
+    try {
+      track("preview_clicked", { job_id: jobId, filename: selectedFile?.name })
+      const response = await createPreview(jobId)
+      setPreviewUrl(getPreviewUrl(response.preview_id))
+      setPreviewExpiresAt(response.expires_at)
+      setShowPreviewModal(true)
+    } catch (err) {
+      if (err instanceof APIError) {
+        setError(err.message)
+      } else {
+        setError("Failed to create preview")
+      }
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const handleClosePreview = () => {
+    setShowPreviewModal(false)
+    setPreviewUrl(null)
+    setPreviewExpiresAt(null)
+  }
+
   return (
     <section id="upload" className="w-full py-20 bg-white">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -199,6 +233,24 @@ export function UploadSection() {
                 Your diagram has been converted and is ready to download.
               </p>
               <div className="flex flex-col gap-3">
+                <Button
+                  onClick={handlePreview}
+                  disabled={previewLoading}
+                  variant="outline"
+                  className="w-full border-yellow-300 text-yellow-700 hover:bg-yellow-50"
+                >
+                  {previewLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                      Generating Preview...
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="mr-2 h-5 w-5" />
+                      Preview (3/hour limit)
+                    </>
+                  )}
+                </Button>
                 <Button
                   onClick={handleDownload}
                   className="w-full bg-green-600 hover:bg-green-700 text-white"

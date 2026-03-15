@@ -1,80 +1,86 @@
 > !! DO NOT COMMIT THIS FILE !!
 
-# T0-merge-stabilize · Phase 0
+# T0-preview · Phase 0
 
-> Merge foundational PRs and resolve conflicts to establish a stable main branch
+> Implement preview generation with watermark, blur, and rate limiting to increase conversion
 
 ## Context
 
-- **Dependency**: None (Phase 0, first task)
-- **Boundary**: Git operations only, no code changes beyond merge conflict resolution
+- **Dependency**: None (can be developed in parallel with existing API)
+- **Boundary**: Focus on preview MVP; payment integration out of scope for now
 
-## Current State
+## Preview MVP Specification
 
-11 open PRs with conflicts:
-- **Duplicates**: #39 duplicates #36, #40 duplicates #38
-- **Conflicts**: #38 vs #40 (CI/CD), #41 vs #42 (arrow_processor.py)
+### Requirements
 
-## Merge Order (Dependency Graph)
-
-```
-#25 (config-loader) → #31 (text-extraction) → #38 (CI/CD)
-                                    ↓
-                              #36 (Next.js frontend)
-                                    ↓
-                    #35 (arrow), #34 (SAM3), #37 (layer-merge)
-                                    ↓
-                         #41, #42 (arrow_processor)
-```
+1. **Low-res preview (50% quality)** with diagonal "EditBanana Preview" watermark
+2. **View-only display** (no download, right-click disabled)
+3. **Auto-expire after 5 minutes** then auto-delete
+4. **Blur partial - bottom 30%** blurred with "Pay $X to unlock full quality" CTA
+5. **Rate limit** - max 3 previews per IP per hour
 
 ## Tasks
 
-### 1. Merge foundational PRs
+### Backend: Preview Generation Endpoint
 
-- [ ] Merge PR #25 (config-loader improvements)
-- [ ] Merge PR #31 (text-extraction fix)
-- [ ] Merge PR #38 (CI/CD workflow) - close #40 as duplicate
-- **File**: Git operations
-- **验收**: `git log --oneline` shows clean merge commits
-- **测试**: CI passes on merged branch
+- [ ] Create `/api/v1/jobs/{job_id}/preview` endpoint
+- [ ] Generate low-res image (50% quality JPEG) from source
+- [ ] Add diagonal "EditBanana Preview" watermark using PIL/Pillow
+- [ ] Blur bottom 30% of image with blur overlay
+- [ ] Store preview with 5-minute TTL in Redis/memory
+- [ ] Implement IP-based rate limiting (3 previews/hour)
+- [ ] Auto-cleanup expired previews via background task
 
-### 2. Merge frontend base
+**File**: `apps/api/routes/preview.py` (new)
+**File**: `apps/api/services/preview_generator.py` (new)
+**File**: `apps/api/middleware/rate_limit.py` (new)
+**验收**:
+- Given uploaded image, When preview requested, Then returns watermarked low-res image with bottom 30% blurred
+- Given same IP, When 4th preview requested within 1 hour, Then returns 429 error
+- Given preview generated, When 5 minutes elapsed, Then file is deleted
 
-- [ ] Merge PR #36 (Next.js frontend) - close #39 as duplicate
-- **File**: Git operations
-- **验收**: Frontend code present in apps/web/
-- **测试**: `npm run build` succeeds
+### Frontend: Preview Modal
 
-### 3. Merge feature PRs
+- [ ] Create `PreviewModal` component with view-only display
+- [ ] Disable right-click context menu on preview image
+- [ ] Show blur overlay on bottom 30% with CTA button
+- [ ] Display "Pay $X to unlock" CTA (UI only, no payment logic yet)
+- [ ] Add countdown timer showing expiration
+- [ ] Add close button and "Download Full" button (triggers payment flow later)
 
-- [ ] Merge PR #35 (arrow improvements)
-- [ ] Merge PR #34 (SAM3 integration)
-- [ ] Merge PR #37 (layer-based XML merging)
-- **File**: Git operations
-- **验收**: All feature code integrated
-- **测试**: pytest tests/core/ passes
+**File**: `apps/web/src/components/preview/preview-modal.tsx` (new)
+**File**: `apps/web/src/app/sections/preview-section.tsx` (new)
+**验收**:
+- Given conversion complete, When preview button clicked, Then modal opens with preview
+- Given preview open, When right-click attempted, Then context menu blocked
+- Given preview open, When 5 minutes pass, Then modal auto-closes with expiration message
 
-### 4. Resolve arrow_processor conflicts
+### API Integration
 
-- [ ] Analyze #41 vs #42 differences
-- [ ] Choose best implementation or merge both
-- [ ] Resolve any merge conflicts
-- **File**: `core/processors/arrow_processor.py`
-- **验收**: No duplicate code, all tests pass
-- **测试**: Arrow processing functional
+- [ ] Add `getPreviewUrl(jobId)` function in `api.ts`
+- [ ] Add preview state management in upload section
+- [ ] Integrate preview button in completion state
+
+**File**: `apps/web/src/lib/api.ts` (modify)
+**File**: `apps/web/src/app/sections/upload-section.tsx` (modify)
+**验收**:
+- Given job completed, When user clicks "Preview", Then preview modal opens with generated preview
+
+## Testing Plan
+
+1. **Unit Tests**: Preview generation with various image sizes
+2. **Integration Tests**: Rate limiting, TTL cleanup
+3. **Manual Tests**:
+   - Upload → Convert → Preview flow
+   - Rate limit enforcement
+   - Auto-expiration
 
 ## Done When
 
-- [ ] All foundational PRs merged
-- [ ] Duplicates (#39, #40) closed
-- [ ] No merge conflicts remaining
-- [ ] CI passes on main
-- [ ] PR created with clean merge
-
-## Test Plan
-
-**Manual verification**:
-1. Check `git log --graph` shows clean history
-2. Verify no duplicate files
-3. Run full test suite
-4. Confirm CI passes
+- [ ] All tasks checkbox checked
+- [ ] Preview endpoint returns watermarked, partially-blurred images
+- [ ] Rate limiting working (3 previews/hour/IP)
+- [ ] Frontend preview modal displays correctly
+- [ ] Auto-cleanup removes expired previews
+- [ ] Manual test: full upload→convert→preview flow works
+- [ ] `/pr2default` created and merged

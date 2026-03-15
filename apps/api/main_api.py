@@ -27,6 +27,10 @@ import uvicorn
 # 导入主流程
 from main import load_config, Pipeline
 
+# 导入路由和中间件
+from routes.preview import router as preview_router
+from middleware.rate_limit import PreviewRateLimitMiddleware
+
 # ======================== 任务存储 ========================
 # 简单内存存储，生产环境应使用Redis
 class JobStore:
@@ -108,6 +112,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 预览端点速率限制中间件 (3 previews/hour)
+app.add_middleware(PreviewRateLimitMiddleware)
+
+# 注册预览路由
+app.include_router(preview_router)
 
 # ======================== 路由 ========================
 

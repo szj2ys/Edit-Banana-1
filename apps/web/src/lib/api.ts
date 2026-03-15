@@ -105,6 +105,48 @@ export async function downloadResult(jobId: string): Promise<Blob> {
   }
 }
 
+// 创建预览
+export async function createPreview(jobId: string): Promise<{
+  success: boolean
+  preview_id: string
+  preview_url: string
+  expires_at: string
+  rate_limit: {
+    limit: number
+    window_seconds: number
+    current_count: number
+  }
+}> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/jobs/${jobId}/preview`, {
+      method: "POST",
+    })
+
+    if (!response.ok) {
+      if (response.status === 429) {
+        const errorData = await response.json()
+        throw new APIError(
+          errorData.detail?.message || "预览次数已达上限（每小时3次）",
+          response.status
+        )
+      }
+      await handleResponse(response)
+    }
+
+    return response.json()
+  } catch (error) {
+    if (error instanceof APIError) {
+      throw error
+    }
+    throw new APIError(error instanceof Error ? error.message : "创建预览失败")
+  }
+}
+
+// 获取预览图片URL
+export function getPreviewUrl(previewId: string): string {
+  return `${API_BASE_URL}/api/v1/previews/${previewId}`
+}
+
 // 取消任务
 export async function cancelJob(jobId: string): Promise<void> {
   try {
